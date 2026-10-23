@@ -292,6 +292,29 @@ pub(crate) async fn save_proxy_client_host(state: &AppState, host: &str) -> Resu
     resync_proxy_clients(state).await
 }
 
+/// 获取 TLS 证书路径（PEM）。空表示按 `<应用数据目录>/tls/<监听主机>.crt` 找。
+#[tauri::command]
+pub async fn get_proxy_tls_cert() -> Result<String, String> {
+    Ok(crate::settings::get_proxy_tls_cert().unwrap_or_default())
+}
+
+/// 保存 TLS 证书路径并重启代理服务器（证书只在启动时加载，必须重启才生效）。
+/// 留空则回到默认位置查找。
+#[tauri::command]
+pub async fn set_proxy_tls_cert(
+    state: tauri::State<'_, AppState>,
+    path: String,
+) -> Result<(), String> {
+    crate::settings::set_proxy_tls_cert(&path).map_err(|e| e.to_string())?;
+    // 证书在 start() 里读取，改完必须重启才能换掉已加载的 acceptor
+    state
+        .proxy_service
+        .restart_for_tls_change()
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// 按当前的代理地址重写接上路由的客户端（含 Claude Desktop 的路由模式）。
 async fn resync_proxy_clients(state: &AppState) -> Result<(), String> {
     crate::mode::controller::resync_routes(state).await

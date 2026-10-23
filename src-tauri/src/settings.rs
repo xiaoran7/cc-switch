@@ -575,6 +575,13 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy_client_host: Option<String>,
 
+    /// TLS 证书（PEM）路径。只在代理监听非回环地址时用得上：那种情况下客户端拿到的
+    /// 是 `https://` 地址，代理必须做 TLS 终结。留空时按
+    /// `<应用数据目录>/tls/<监听主机>.crt` 与 `.key` 找。
+    /// 私钥默认与证书同目录同名（扩展名换成 `.key`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_tls_cert: Option<String>,
+
     // ===== Skill 同步设置 =====
     /// Skill 同步方式：auto（默认，优先 symlink）、symlink、copy
     #[serde(default)]
@@ -683,6 +690,7 @@ impl Default for AppSettings {
             current_provider_hermes: None,
             current_provider_agy: None,
             proxy_client_host: None,
+            proxy_tls_cert: None,
             skill_sync_method: SyncMethod::default(),
             skill_storage_location: SkillStorageLocation::default(),
             webdav_sync: None,
@@ -1180,6 +1188,21 @@ pub fn set_proxy_client_host(host: &str) -> Result<(), AppError> {
     let host = host.trim();
     mutate_settings(|settings| {
         settings.proxy_client_host = (!host.is_empty()).then(|| host.to_string());
+    })
+}
+
+/// TLS 证书路径（见 [`AppSettings::proxy_tls_cert`]），没设或为空时是 `None`。
+pub fn get_proxy_tls_cert() -> Option<String> {
+    get_settings()
+        .proxy_tls_cert
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+}
+
+pub fn set_proxy_tls_cert(path: &str) -> Result<(), AppError> {
+    let path = path.trim();
+    mutate_settings(|settings| {
+        settings.proxy_tls_cert = (!path.is_empty()).then(|| path.to_string());
     })
 }
 
