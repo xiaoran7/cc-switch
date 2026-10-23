@@ -34,6 +34,7 @@ pub(crate) mod switch_lock;
 pub mod thinking_budget_rectifier;
 pub mod thinking_optimizer;
 pub mod thinking_rectifier;
+pub mod tls;
 pub(crate) mod tool_media;
 pub(crate) mod types;
 mod upstream_guard;

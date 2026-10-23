@@ -3383,11 +3383,13 @@ mod mode_tests {
             .await
             .expect("retry the same save");
         let settings = fs::read_to_string(settings_path()).unwrap();
-        assert!(settings.contains("http://172.25.144.1:"), "{settings}");
+        // 非回环地址必须写 https：Claude Desktop 的 inferenceGatewayBaseUrl 只放行
+        // 回环主机走明文 http，其余一律要 https（见 services::proxy::proxy_origin）。
+        assert!(settings.contains("https://172.25.144.1:"), "{settings}");
         assert!(
             crate::claude_desktop_config::proxy_gateway_base_url_from_db(&state.db)
                 .unwrap()
-                .starts_with("http://172.25.144.1:")
+                .starts_with("https://172.25.144.1:")
         );
 
         crate::commands::save_proxy_client_host(&state, "")

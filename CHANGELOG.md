@@ -5,6 +5,46 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+<!-- FORK-NOTICE: 以下条目属于本地 Fork，不属于上游。上游条目一律从 "## [4.0.25]" 开始。 -->
+
+## [4.0.19+tailnet.1] - 2026-10-24
+
+本 Fork 补上非回环监听地址的 HTTPS 支持。上游的 `proxy_origin()` 无条件拼 `http://`，
+而 Claude Desktop 的 `inferenceGatewayBaseUrl` 校验只放行 `127.0.0.1` / `localhost` / `[::1]`
+三个字面量走明文，其余主机必须 `https`。所以把监听/客户端地址设成 tailnet IP 或域名时，
+桌面端在配置校验阶段就报 `must use https (or http on loopback)`，请求根本发不出去。
+
+详见 [FORK.md](FORK.md)。
+
+### Added
+
+- **代理 TLS 终结**：监听地址为非回环时，代理自动启用 TLS。证书按 `proxy_tls_cert` 设置项
+  → `<应用数据目录>/tls/<主机>.crt|.key` 的顺序查找。找不到证书时**不静默降级成明文**，
+  启动直接失败并给出 `tailscale cert` 的签发提示。
+- **`get_proxy_tls_cert` / `set_proxy_tls_cert` 命令**：改证书后自动重启代理以加载新 acceptor。
+
+### Changed
+
+- **`proxy_origin()` 按主机名选协议**：回环地址仍走 `http`（零开销，与上游一致），
+  非回环一律 `https`。新增 `is_loopback_host()`，判定范围与桌面端的白名单对齐。
+- **`server.rs` accept 循环重构**：抽出 `peek_header_cases()` 与 `serve_conn()`，
+  明文与 TLS 两条路径共用同一段 hyper 服务逻辑。
+
+### Fixed
+
+- **rustls CryptoProvider 未安装导致启动 panic**：依赖树里 `hyper-rustls` 用 `aws-lc-rs`、
+  `reqwest` 用 `ring`，两个 provider 同时启用时 rustls 0.23 无法自动判定，
+  `ServerConfig::builder()` 直接 panic。新增 `tls::install_crypto_provider()`（`Once` 保护），
+  在 `build_acceptor()` 入口调用。上游从没建过 `ServerConfig`，这个雷一直埋着。
+- **`saving_the_client_host_rewrites_routed_clients_and_retries_on_the_same_value`**：
+  该测试断言 `172.25.144.1`（私网地址）写成 `http://`，与新行为冲突，已更新为 `https://`。
+
+### Known Limitations
+
+- TLS 路径抓不到请求头原始大小写（TLS 首包是 ClientHello，`peek` 不到 HTTP 头），
+  `preserve_header_case` 在该路径退化为 hyper 默认行为。HTTP/1.1 头名大小写不敏感，不影响功能。
+- 证书不自动续期。
+
 ## [4.0.25] - 2026-11-02
 
 This release adds on-demand MCP connectivity checks, an opt-in guard that pauses official Codex requests routed through CC Switch before the five-hour or weekly quota runs out, automatic exchange rates for the usage page, a sub-agent concurrency limit in the Codex provider form, provider and upstream model descriptions for routed and stacked models in the Claude Code and Claude Desktop model pickers, Kimi Code session deletion and GPT-6.1 Terra pricing. The local router now rejects requests sent from web pages. Fixes cover "Open terminal" inheriting proxy and stack settings, route mode putting the placeholder in `ANTHROPIC_API_KEY`, one attached document breaking every later turn on text-only upstreams, provider form values flickering on Windows, Pi MCP import and subagent usage, models.dev sync failing in proxy-only environments, forced web search rejected by xAI, the tray panel not opening during startup usage import, and mapped Codex requests counted twice.

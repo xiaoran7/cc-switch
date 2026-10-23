@@ -145,6 +145,39 @@ impl ProxyServer {
         // 记录启动时间
         *self.state.start_time.write().await = Some(std::time::Instant::now());
 
+        // 监听地址是非回环时，客户端拿到的会是 https:// 地址（见 services::proxy::proxy_origin），
+        // 所以这里必须真的做 TLS 终结，否则客户端握手会失败。
+        // 回环地址保持明文，不改变本机原有的零成本路径。
+        let tls_acceptor = if crate::services::proxy::is_loopback_host(&self.config.listen_address) {
+            log::debug!("[ProxyTLS] 监听回环地址，使用明文 HTTP");
+            None
+        } else {
+            let data_dir = crate::config::get_app_config_dir();
+            let explicit = crate::settings::get_proxy_tls_cert();
+            let material = super::tls::TlsMaterial::resolve(
+                explicit.as_deref(),
+                &data_dir,
+                &self.config.listen_address,
+            )
+            .ok_or_else(|| {
+                ProxyError::BindFailed(format!(
+                    "监听 {} 需要 TLS，但找不到证书。请用 `tailscale cert {}` 签发，\
+                     或把证书放到 {}/tls/ 下",
+                    self.config.listen_address,
+                    self.config.listen_address,
+                    data_dir.display()
+                ))
+            })?;
+            let acceptor = super::tls::build_acceptor(&material)
+                .map_err(ProxyError::BindFailed)?;
+            log::info!(
+                "[ProxyTLS] 监听 {} 启用 TLS: cert={}",
+                self.config.listen_address,
+                material.cert.display()
+            );
+            Some(acceptor)
+        };
+
         // 启动服务器 — 使用手动 hyper HTTP/1.1 accept loop
         // 开启 preserve_header_case 以捕获客户端请求头的原始大小写
         let state = self.state.clone();
@@ -163,51 +196,32 @@ impl ProxyServer {
                         };
 
                         let app = app.clone();
+                        let tls_acceptor = tls_acceptor.clone();
                         tokio::spawn(async move {
-                            // Peek raw TCP bytes to capture original header casing
-                            // before hyper parses (and lowercases) the header names.
-                            let original_cases = {
-                                let mut peek_buf = vec![0u8; 8192];
-                                match stream.peek(&mut peek_buf).await {
-                                    Ok(n) => {
-                                        let cases = super::hyper_client::OriginalHeaderCases::from_raw_bytes(&peek_buf[..n]);
-                                        log::debug!(
-                                            "[ProxyServer] Peeked {} bytes, captured {} header casings",
-                                            n, cases.cases.len()
-                                        );
-                                        cases
+                            // TLS 握手必须在 peek 之前完成：peek 看到的是密文，解析不出头名大小写。
+                            // 明文流和 TLS 流是不同类型，两条路径各走一遍 serve。
+                            match tls_acceptor {
+                                None => {
+                                    let cases = peek_header_cases(&stream).await;
+                                    serve_conn(stream, app, cases).await;
+                                }
+                                Some(acceptor) => match acceptor.accept(stream).await {
+                                    Ok(stream) => {
+                                        // TLS 里首包是 ClientHello，peek 不到 HTTP 头，
+                                        // 头名大小写只能退回 hyper 的默认处理。
+                                        serve_conn(
+                                            stream,
+                                            app,
+                                            super::hyper_client::OriginalHeaderCases::default(),
+                                        )
+                                        .await;
                                     }
                                     Err(e) => {
-                                        log::debug!("[ProxyServer] peek failed (non-fatal): {e}");
-                                        super::hyper_client::OriginalHeaderCases::default()
+                                        // 客户端探测、证书不匹配、非 TLS 明文探测都会走到这里，
+                                        // 属于正常噪音，debug 级别。
+                                        log::debug!("[{SRV}] TLS 握手失败: {e}", SRV = log_srv::CONN_ERR);
                                     }
-                                }
-                            };
-
-                            // service_fn 将 axum Router（tower::Service）桥接到 hyper
-                            let service = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
-                                let mut router = app.clone();
-                                let cases = original_cases.clone();
-                                async move {
-                                    // 将 hyper::body::Incoming 转为 axum::body::Body，保留 extensions
-                                    let (mut parts, body) = req.into_parts();
-
-                                    // Insert our own header case map alongside hyper's internal one
-                                    parts.extensions.insert(cases);
-
-                                    let body = axum::body::Body::new(body);
-                                    let axum_req = http::Request::from_parts(parts, body);
-                                    <Router as tower::Service<http::Request<axum::body::Body>>>::call(&mut router, axum_req).await
-                                }
-                            });
-
-                            if let Err(e) = hyper::server::conn::http1::Builder::new()
-                                .preserve_header_case(true)
-                                .serve_connection(TokioIo::new(stream), service)
-                                .await
-                            {
-                                // Connection reset / broken pipe 等在代理场景下很常见，debug 级别
-                                log::debug!("[{SRV}] connection error: {e}", SRV = log_srv::CONN_ERR);
+                                },
                             }
                         });
                     }
@@ -463,6 +477,69 @@ impl ProxyServer {
             .provider_router
             .reset_provider_breaker(provider_id, app_type)
             .await;
+    }
+}
+
+/// 在 hyper 解析前 peek 原始 TCP 字节，抓出请求头的原始大小写。
+///
+/// 只对明文连接有意义：TLS 连接的字节流在握手前是 ClientHello，peek 不到 HTTP 头。
+async fn peek_header_cases(stream: &tokio::net::TcpStream) -> super::hyper_client::OriginalHeaderCases {
+    let mut peek_buf = vec![0u8; 8192];
+    match stream.peek(&mut peek_buf).await {
+        Ok(n) => {
+            let cases = super::hyper_client::OriginalHeaderCases::from_raw_bytes(&peek_buf[..n]);
+            log::debug!(
+                "[ProxyServer] Peeked {} bytes, captured {} header casings",
+                n,
+                cases.cases.len()
+            );
+            cases
+        }
+        Err(e) => {
+            log::debug!("[ProxyServer] peek failed (non-fatal): {e}");
+            super::hyper_client::OriginalHeaderCases::default()
+        }
+    }
+}
+
+/// 在一条（已解密或本就是明文的）连接上跑 hyper HTTP/1.1。
+///
+/// 泛型参数让明文 `TcpStream` 和 `TlsStream<TcpStream>` 共用同一段服务逻辑，
+/// 避免为两条路径各写一份 service_fn。
+async fn serve_conn<S>(stream: S, app: Router, cases: super::hyper_client::OriginalHeaderCases)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    // service_fn 将 axum Router（tower::Service）桥接到 hyper
+    let service = hyper::service::service_fn(
+        move |req: hyper::Request<hyper::body::Incoming>| {
+            let mut router = app.clone();
+            let cases = cases.clone();
+            async move {
+                // 将 hyper::body::Incoming 转为 axum::body::Body，保留 extensions
+                let (mut parts, body) = req.into_parts();
+
+                // Insert our own header case map alongside hyper's internal one
+                parts.extensions.insert(cases);
+
+                let body = axum::body::Body::new(body);
+                let axum_req = http::Request::from_parts(parts, body);
+                <Router as tower::Service<http::Request<axum::body::Body>>>::call(
+                    &mut router,
+                    axum_req,
+                )
+                .await
+            }
+        },
+    );
+
+    if let Err(e) = hyper::server::conn::http1::Builder::new()
+        .preserve_header_case(true)
+        .serve_connection(TokioIo::new(stream), service)
+        .await
+    {
+        // Connection reset / broken pipe 等在代理场景下很常见，debug 级别
+        log::debug!("[{SRV}] connection error: {e}", SRV = log_srv::CONN_ERR);
     }
 }
 
