@@ -41,18 +41,47 @@ impl SavedProxyConfig {
     }
 }
 
+/// 判断主机名是否属于回环范围（与 Claude Desktop 的 `allowLoopbackHttp` 白名单对齐）。
+///
+/// Claude Desktop 对 `inferenceGatewayBaseUrl` 的校验是：`https` 任意主机都行，
+/// `http` 只放行 `127.0.0.1` / `localhost` / `[::1]` 这三个字面量。所以只要写出去的是
+/// 非回环地址，就必须用 `https`，否则桌面端在配置层就报
+/// `must use https (or http on loopback)`，连请求都发不出去。
+pub(crate) fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim().trim_end_matches('.');
+    if host.eq_ignore_ascii_case("localhost") || host.to_ascii_lowercase().ends_with(".localhost") {
+        return true;
+    }
+    // IPv6 字面量：`[::1]` / `::1` / `::`
+    if let Some(inner) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        return matches!(inner, "::1" | "::");
+    }
+    if host == "::1" || host == "::" {
+        return true;
+    }
+    // IPv4：127.0.0.0/8 与 0.0.0.0
+    if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
+        return ip.is_loopback() || ip.is_unspecified();
+    }
+    false
+}
+
 /// 客户端连接代理用的地址。`host` 是设置里的客户端地址，没设时是监听地址，后者可能是
 /// `0.0.0.0` / `::`（监听所有网卡），客户端连不上这个地址，改用本机回环；IPv6 加方括号。
+///
+/// 协议按主机名决定：回环用 `http`（桌面端只放行这一种），非回环一律 `https`——
+/// 这样 tailnet IP / MagicDNS 名这类"跨机但非公网"的地址才能通过桌面端的校验。
 pub(crate) fn proxy_origin(host: &str, listen_port: u16) -> String {
     let host = match host {
         "0.0.0.0" => "127.0.0.1",
         "::" => "::1",
         other => other,
     };
+    let scheme = if is_loopback_host(host) { "http" } else { "https" };
     if host.contains(':') && !host.starts_with('[') {
-        format!("http://[{host}]:{listen_port}")
+        format!("{scheme}://[{host}]:{listen_port}")
     } else {
-        format!("http://{host}:{listen_port}")
+        format!("{scheme}://{host}:{listen_port}")
     }
 }
 
@@ -514,6 +543,18 @@ impl ProxyService {
         let require_restart = config.listen_address != previous.listen_address
             || config.listen_port != previous.listen_port;
         self.apply_saved_config(require_restart, SavedProxyConfig::Global(previous))
+            .await
+    }
+
+    /// 证书路径变了之后重启代理服务器：TLS acceptor 只在 `start()` 里构造一次，
+    /// 不重启就换不掉。配置本身没动，所以把当前配置原样当 previous 传进去。
+    pub async fn restart_for_tls_change(&self) -> Result<bool, String> {
+        let current = self
+            .db
+            .get_global_proxy_config()
+            .await
+            .map_err(|e| format!("获取全局代理配置失败: {e}"))?;
+        self.apply_saved_config(true, SavedProxyConfig::Global(current))
             .await
     }
 
