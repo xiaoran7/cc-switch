@@ -1,5 +1,12 @@
 export interface HostOption {
   value: string;
+  kind?:
+    | "loopback"
+    | "tailscaleDomain"
+    | "tailscaleIp"
+    | "all"
+    | "custom"
+    | string;
   label: string;
   description: string;
   isTls: boolean;

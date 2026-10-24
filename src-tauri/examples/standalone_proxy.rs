@@ -1,7 +1,7 @@
-use std::sync::Arc;
-use cc_switch_lib::Database;
 use cc_switch_lib::proxy::server::ProxyServer;
 use cc_switch_lib::proxy::types::ProxyConfig;
+use cc_switch_lib::Database;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -44,8 +44,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let server = ProxyServer::new(config, db, None);
-    let info = server.start().await.map_err(|e| format!("Server start failed: {e}"))?;
-    println!("[STANDALONE] Server started: {} on port {}", info.address, info.port);
+    let info = server
+        .start()
+        .await
+        .map_err(|e| format!("Server start failed: {e}"))?;
+    println!(
+        "[STANDALONE] Server started: {} on port {}",
+        info.address, info.port
+    );
     println!("[STANDALONE] TLS Termination is ACTIVE. Ready for verification requests.");
 
     // 保持运行，等待外部终止信号

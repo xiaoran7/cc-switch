@@ -761,7 +761,9 @@ pub fn create_responses_sse_stream_from_chat<E: std::error::Error + Send + 'stat
 
 /// Create a stream that converts Chat Completions SSE chunks into Responses SSE
 /// events while restoring Codex tool namespace/custom/tool_search metadata.
-pub fn create_responses_sse_stream_from_chat_with_context<E: std::error::Error + Send + 'static>(
+pub(crate) fn create_responses_sse_stream_from_chat_with_context<
+    E: std::error::Error + Send + 'static,
+>(
     stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
     tool_context: CodexToolContext,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {

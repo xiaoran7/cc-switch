@@ -648,6 +648,10 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy_tls_cert: Option<String>,
 
+    /// 自定义监听地址预设列表（持久化保存在本地 settings.json，切走后仍保留且可在下拉菜单中删除）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_listen_hosts: Vec<String>,
+
     // ===== Skill 同步设置 =====
     /// Skill 同步方式：auto（默认，优先 symlink）、symlink、copy
     #[serde(default)]
@@ -761,6 +765,7 @@ impl Default for AppSettings {
             current_provider_agy: None,
             proxy_client_host: None,
             proxy_tls_cert: None,
+            custom_listen_hosts: Vec::new(),
             skill_sync_method: SyncMethod::default(),
             skill_storage_location: SkillStorageLocation::default(),
             webdav_sync: None,
@@ -1289,6 +1294,32 @@ pub fn set_proxy_tls_cert(path: &str) -> Result<(), AppError> {
     let path = path.trim();
     mutate_settings(|settings| {
         settings.proxy_tls_cert = (!path.is_empty()).then(|| path.to_string());
+    })
+}
+
+/// 获取自定义监听地址预设列表
+pub fn get_custom_listen_hosts() -> Vec<String> {
+    get_settings().custom_listen_hosts.clone()
+}
+
+/// 添加自定义监听地址预设（自动去重且忽略空白）
+pub fn add_custom_listen_host(host: &str) -> Result<(), AppError> {
+    let host = host.trim().to_string();
+    if host.is_empty() {
+        return Ok(());
+    }
+    mutate_settings(|settings| {
+        if !settings.custom_listen_hosts.contains(&host) {
+            settings.custom_listen_hosts.push(host);
+        }
+    })
+}
+
+/// 删除自定义监听地址预设
+pub fn remove_custom_listen_host(host: &str) -> Result<(), AppError> {
+    let host = host.trim();
+    mutate_settings(|settings| {
+        settings.custom_listen_hosts.retain(|h| h.trim() != host);
     })
 }
 

@@ -137,6 +137,11 @@ export const proxyApi = {
     return invoke("get_proxy_endpoints_info");
   },
 
+  // 删除用户自定义的监听地址预设
+  async deleteCustomListenHost(host: string): Promise<void> {
+    return invoke("delete_custom_listen_host", { host });
+  },
+
   // 更新全局代理配置
   async updateGlobalProxyConfig(config: GlobalProxyConfig): Promise<void> {
     return invoke("update_global_proxy_config", { config });
