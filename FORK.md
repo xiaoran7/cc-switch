@@ -23,13 +23,15 @@
 |---|---|
 | `src-tauri/src/services/proxy.rs` | `proxy_origin()` 按主机名选协议；新增 `is_loopback_host()` |
 | `src-tauri/src/proxy/tls.rs` | **新增**。证书解析、rustls acceptor 构造、单元测试 |
-| `src-tauri/src/proxy/server.rs` | accept 循环接入 TLS 终结；抽出 `peek_header_cases()` / `serve_conn()` |
+| `src-tauri/src/proxy/server.rs` | accept 循环接入 TLS 终结；抽出 `peek_header_cases()` / `serve_conn()`；支持域名解析 |
 | `src-tauri/src/proxy/mod.rs` | 注册 `tls` 模块 |
 | `src-tauri/src/settings.rs` | 新增 `proxy_tls_cert` 设置项与读写函数 |
-| `src-tauri/src/commands/proxy.rs` | 新增 `get_proxy_tls_cert` / `set_proxy_tls_cert` 命令 |
-| `src-tauri/src/lib.rs` | 注册上述两个命令 |
+| `src-tauri/src/commands/proxy.rs` | 新增 `get_proxy_tls_cert` / `set_proxy_tls_cert` / `get_proxy_endpoints_info` 命令 |
+| `src-tauri/src/lib.rs` | 注册上述三个命令 |
 | `src-tauri/src/mode/controller.rs` | 更新一个断言旧行为的测试 |
 | `src-tauri/Cargo.toml` | 新增 `rustls-pemfile = "2"` |
+| `src/components/settings/sections/RoutingSection.tsx` | **前端增强**。监听地址预设下拉选择器、自定义输入支持与实时证书与协议状态条 |
+| `src/types/proxy.ts` / `src/lib/api/proxy.ts` / `src/lib/query/proxy.ts` | 代理端点候选与 TLS 状态数据模型与 React Query 绑定 |
 
 ## 为什么需要这个改动
 

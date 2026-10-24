@@ -325,6 +325,147 @@ pub async fn set_proxy_tls_cert(
         .map_err(|e| e.to_string())
 }
 
+/// 候选监听主机选项
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostOption {
+    pub value: String,
+    pub label: String,
+    pub description: String,
+    pub is_tls: bool,
+}
+
+/// 代理端点、TLS 证书与生效信息
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyEndpointsInfo {
+    pub listen_address: String,
+    pub listen_port: u16,
+    pub client_host: Option<String>,
+    pub effective_origin: String,
+    pub is_tls: bool,
+    pub detected_cert_file: Option<String>,
+    pub detected_cert_path: Option<String>,
+    pub cert_available: bool,
+    pub available_hosts: Vec<HostOption>,
+}
+
+/// 获取代理端点及 TLS 状态（用于前端下拉选择与状态展示）
+#[tauri::command]
+pub async fn get_proxy_endpoints_info(
+    state: tauri::State<'_, AppState>,
+) -> Result<ProxyEndpointsInfo, String> {
+    let global_config = state.db.get_global_proxy_config().await.map_err(|e| e.to_string())?;
+    let listen_address = global_config.listen_address;
+    let listen_port = global_config.listen_port;
+    let client_host = crate::settings::get_proxy_client_host().filter(|h| !h.trim().is_empty());
+
+    let target_host = client_host.as_deref().unwrap_or(&listen_address);
+    let effective_origin = crate::services::proxy::proxy_origin(target_host, listen_port);
+    let is_tls = !crate::services::proxy::is_loopback_host(target_host);
+
+    let data_dir = crate::config::get_app_config_dir();
+    let explicit = crate::settings::get_proxy_tls_cert();
+    let material = crate::proxy::tls::TlsMaterial::resolve(explicit.as_deref(), &data_dir, target_host);
+
+    let (cert_available, detected_cert_file, detected_cert_path) = match material {
+        Some(mat) => (
+            true,
+            mat.cert.file_name().map(|n| n.to_string_lossy().to_string()),
+            Some(mat.cert.to_string_lossy().to_string()),
+        ),
+        None => (false, None, None),
+    };
+
+    let mut available_hosts = Vec::new();
+    available_hosts.push(HostOption {
+        value: "127.0.0.1".to_string(),
+        label: "127.0.0.1 (本地回环 - 明文 HTTP)".to_string(),
+        description: "仅允许本机应用访问，无加密开销".to_string(),
+        is_tls: false,
+    });
+
+    // 扫描 tls 目录获取已签发的 *.ts.net 域名
+    let tls_dir = data_dir.join("tls");
+    if let Ok(entries) = std::fs::read_dir(&tls_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("crt") {
+                let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                let host_stem = file_name.strip_suffix(".crt").unwrap_or(file_name);
+                if host_stem.contains(".ts.net") {
+                    available_hosts.push(HostOption {
+                        value: host_stem.to_string(),
+                        label: format!("{host_stem} (Tailscale 域名 - 开启 HTTPS 🔒)"),
+                        description: "经由 Tailscale 内网访问，公共 CA 证书保护".to_string(),
+                        is_tls: true,
+                    });
+                    break;
+                }
+            }
+        }
+    }
+
+    // 探测 Tailscale IP
+    let ts_ip_res = tokio::task::spawn_blocking(|| {
+        std::process::Command::new("tailscale")
+            .args(["ip", "-4"])
+            .output()
+            .ok()
+            .and_then(|out| {
+                if out.status.success() {
+                    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if s.starts_with("100.") {
+                        Some(s)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+    }).await.ok().flatten();
+
+    if let Some(ts_ip) = ts_ip_res {
+        available_hosts.push(HostOption {
+            value: ts_ip.clone(),
+            label: format!("{ts_ip} (Tailscale IP - 开启 HTTPS 🔒)"),
+            description: "Tailscale 内网 IP，自动适配 Tailnet 证书".to_string(),
+            is_tls: true,
+        });
+    }
+
+    available_hosts.push(HostOption {
+        value: "0.0.0.0".to_string(),
+        label: "0.0.0.0 (全部网卡)".to_string(),
+        description: "监听本机所有网络接口".to_string(),
+        is_tls: false,
+    });
+
+    // 如果当前配置的地址不在预设列表中，增加自定义项
+    if !available_hosts.iter().any(|h| h.value == listen_address) {
+        let is_custom_tls = !crate::services::proxy::is_loopback_host(&listen_address);
+        available_hosts.push(HostOption {
+            value: listen_address.clone(),
+            label: format!("{listen_address} (当前自定义配置)"),
+            description: if is_custom_tls { "非回环自定义地址 - 开启 HTTPS 🔒" } else { "自定义回环地址" }.to_string(),
+            is_tls: is_custom_tls,
+        });
+    }
+
+    Ok(ProxyEndpointsInfo {
+        listen_address,
+        listen_port,
+        client_host,
+        effective_origin,
+        is_tls,
+        detected_cert_file,
+        detected_cert_path,
+        cert_available,
+        available_hosts,
+    })
+}
+
 /// 按当前的代理地址重写接上路由的客户端（含 Claude Desktop 的路由模式）。
 async fn resync_proxy_clients(state: &AppState) -> Result<(), String> {
     crate::mode::controller::resync_routes(state).await

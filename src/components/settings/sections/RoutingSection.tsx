@@ -3,13 +3,21 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { useQueries } from "@tanstack/react-query";
 import { toast } from "@/lib/toast";
-import { ChevronRight, Loader2 } from "lucide-react";
+import {
+  ChevronRight,
+  Loader2,
+  Lock,
+  Globe,
+  ShieldCheck,
+  ShieldAlert,
+} from "lucide-react";
 import type { AppId } from "@/lib/api";
 import { proxyApi } from "@/lib/api/proxy";
 import { useProvidersQuery } from "@/lib/query";
 import {
   useGlobalProxyConfig,
   useProxyClientHost,
+  useProxyEndpointsInfo,
   useProxyStatusQuery,
   useSetProxyClientHost,
   useUpdateGlobalProxyConfig,
@@ -22,6 +30,14 @@ import {
 } from "@/config/appConfig";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { HelpTip, DisabledReason } from "@/components/ui/help-tip";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -48,6 +64,14 @@ const isValidListenAddress = (address: string): boolean => {
   if (/^(\d{1,3}\.){3}\d{1,3}$/.test(address)) {
     return address.split(".").every((part) => Number(part) <= 255);
   }
+  // 域名支持（如 portable-pc.tail462ee4.ts.net 或局域网主机名）
+  if (
+    /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/i.test(
+      address,
+    )
+  ) {
+    return true;
+  }
   // IPv6 字面量：必须含 `:` 且能在 [..] 包装后被 URL 解析器接受（后端会把 `::` 改写成 `::1`）
   if (!address.includes(":")) return false;
   try {
@@ -56,6 +80,16 @@ const isValidListenAddress = (address: string): boolean => {
   } catch {
     return false;
   }
+};
+
+const isLoopbackHost = (host: string): boolean => {
+  const h = host.trim().replace(/\.$/, "");
+  if (h.toLowerCase() === "localhost" || h.toLowerCase().endsWith(".localhost")) {
+    return true;
+  }
+  if (h === "::1" || h === "::" || h === "[::1]" || h === "[::]") return true;
+  if (/^127\.\d+\.\d+\.\d+$/.test(h) || h === "0.0.0.0") return true;
+  return false;
 };
 
 /** 客户端地址：空（按监听地址）、IP 或主机名；`0.0.0.0` / `::` 客户端连不上 */
@@ -100,14 +134,31 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
   const updateConfig = useUpdateGlobalProxyConfig();
   const { data: savedClientHost } = useProxyClientHost();
   const saveClientHostMutation = useSetProxyClientHost();
+  const { data: endpointsInfo } = useProxyEndpointsInfo();
   const [address, setAddress] = useState("127.0.0.1");
   const [port, setPort] = useState("15721");
   const [addressError, setAddressError] = useState<string | null>(null);
   const [portError, setPortError] = useState<string | null>(null);
+  const [isCustomAddress, setIsCustomAddress] = useState(false);
   const [clientHost, setClientHost] = useState("");
   const [clientHostError, setClientHostError] = useState<string | null>(null);
   const [confirmExitAll, setConfirmExitAll] = useState(false);
   const [failoverApp, setFailoverApp] = useState<ProxyAppId>("claude");
+
+  const availableHosts = endpointsInfo?.availableHosts ?? [
+    {
+      value: "127.0.0.1",
+      label: "127.0.0.1 (本地回环 - 明文 HTTP)",
+      description: "仅允许本机应用访问，无加密开销",
+      isTls: false,
+    },
+    {
+      value: "0.0.0.0",
+      label: "0.0.0.0 (全部网卡)",
+      description: "监听本机所有网络接口",
+      isTls: false,
+    },
+  ];
 
   useEffect(() => {
     if (config) {
@@ -117,8 +168,25 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
   }, [config]);
 
   useEffect(() => {
+    if (config && availableHosts.length > 0) {
+      const isPreset = availableHosts.some((h) => h.value === config.listenAddress);
+      setIsCustomAddress(!isPreset);
+    }
+  }, [config, availableHosts]);
+
+  useEffect(() => {
     if (savedClientHost !== undefined) setClientHost(savedClientHost);
   }, [savedClientHost]);
+
+  const liveTargetHost = clientHost.trim() || address.trim() || "127.0.0.1";
+  const liveIsTls = !isLoopbackHost(liveTargetHost);
+  const liveDisplayHost = liveTargetHost === "0.0.0.0" ? "127.0.0.1" : liveTargetHost;
+  const livePort = port.trim() || "15721";
+  const liveEffectiveOrigin = `${liveIsTls ? "https" : "http"}://${
+    liveDisplayHost.includes(":") && !liveDisplayHost.startsWith("[")
+      ? `[${liveDisplayHost}]`
+      : liveDisplayHost
+  }:${livePort}`;
 
   const modeQueries = useQueries({
     queries: MODE_APP_IDS.map((app) => ({
@@ -276,25 +344,68 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
             label={t("routingSettings.listen")}
             control={
               <div className="flex items-start gap-3">
-                <label className="space-y-1">
+                <div className="space-y-1">
                   <span className="block text-caption font-medium text-fg-2">
                     {t("routingSettings.address")}
                   </span>
-                  <Input
-                    value={address}
-                    onChange={(event) => setAddress(event.target.value)}
-                    aria-invalid={addressError ? true : undefined}
-                    className="w-[150px]"
-                  />
-                  <span
-                    className={cn(
-                      "block text-caption",
-                      addressError ? "text-danger-text" : "text-fg-3",
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={
+                        !isCustomAddress &&
+                        availableHosts.some((h) => h.value === address)
+                          ? address
+                          : "custom"
+                      }
+                      onValueChange={(val) => {
+                        if (val !== "custom") {
+                          setAddress(val);
+                          setIsCustomAddress(false);
+                          setAddressError(null);
+                        } else {
+                          setIsCustomAddress(true);
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="w-[300px]">
+                        <SelectValue placeholder={t("routingSettings.address")} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableHosts.map((host) => (
+                          <SelectItem key={host.value} value={host.value}>
+                            <div className="flex items-center justify-between gap-3 w-full pr-1">
+                              <span className="font-mono text-xs">{host.label}</span>
+                              {host.isTls ? (
+                                <Lock className="h-3 w-3 text-emerald-500 shrink-0" />
+                              ) : null}
+                            </div>
+                          </SelectItem>
+                        ))}
+                        <SelectSeparator />
+                        <SelectItem value="custom">
+                          <span className="text-xs text-fg-2">
+                            {t("routingSettings.customOption", "自定义输入...")}
+                          </span>
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    {isCustomAddress && (
+                      <Input
+                        value={address}
+                        placeholder="例如 192.168.1.100"
+                        onChange={(event) => setAddress(event.target.value)}
+                        aria-invalid={addressError ? true : undefined}
+                        className="w-[180px] font-mono text-xs"
+                      />
                     )}
-                  >
-                    {addressError ?? t("routingSettings.addressHint")}
-                  </span>
-                </label>
+                  </div>
+                  {addressError && (
+                    <span className="block text-caption text-danger-text">
+                      {addressError}
+                    </span>
+                  )}
+                </div>
+
                 <label className="space-y-1">
                   <span className="block text-caption font-medium text-fg-2">
                     {t("routingSettings.port")}
@@ -304,7 +415,7 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
                     inputMode="numeric"
                     onChange={(event) => setPort(event.target.value)}
                     aria-invalid={portError ? true : undefined}
-                    className="w-[96px]"
+                    className="w-[96px] font-mono"
                   />
                   <span
                     className={cn(
@@ -315,10 +426,10 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
                     {portError ?? "1024–65535"}
                   </span>
                 </label>
+
                 <Button
                   variant="neutral"
                   size="regular"
-                  // 和输入框顶边对齐：上面的小标题 18 + 间距 4
                   className="mt-[22px]"
                   disabled={!listenDirty || updateConfig.isPending}
                   onClick={() => void saveListen()}
@@ -330,7 +441,52 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
                 </Button>
               </div>
             }
-          />
+          >
+            {/* 实时证书与网关状态条 */}
+            <div className="rounded-lg border border-border/80 bg-subtle/50 px-3.5 py-2.5 text-caption">
+              <div className="flex flex-wrap items-center justify-between gap-y-2 gap-x-4">
+                <div className="flex items-center gap-2.5">
+                  {liveIsTls ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                      <Lock className="h-3 w-3" />
+                      HTTPS 终结模式
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium text-fg-3 border border-border">
+                      <Globe className="h-3 w-3" />
+                      HTTP 明文模式
+                    </span>
+                  )}
+                  <span className="text-fg-2">
+                    {liveIsTls ? (
+                      endpointsInfo?.certAvailable ? (
+                        <span className="inline-flex items-center gap-1 text-fg-2">
+                          <ShieldCheck className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                          已检测到证书:{" "}
+                          <span className="font-mono font-medium text-fg-1">
+                            {endpointsInfo.detectedCertFile ?? "Tailscale 证书"}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-danger-text">
+                          <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
+                          未检测到有效证书（需在 .cc-switch/tls 目录下放置）
+                        </span>
+                      )
+                    ) : (
+                      "本地回环通信，无加密开销"
+                    )}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 text-fg-3">
+                  <span>写入客户端地址:</span>
+                  <code className="rounded bg-background px-1.5 py-0.5 font-mono text-[11px] text-fg-1 border border-border">
+                    {liveEffectiveOrigin}
+                  </code>
+                </div>
+              </div>
+            </div>
+          </SettingsRow>
           <SettingsRow
             label={t("routingSettings.clientHost")}
             help={{
