@@ -38,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **直接使用 `cargo build --release` 编译导致前端加载 `localhost:3000` 报“无法连接到网络”**：
+  Tauri v2 的宏默认在缺少 `custom-protocol` 特性时判定为开发环境，导致 release 二进制启动后
+  WebView2 试图连接未启动的 Vite 端口并显示系统级网络错误页面。
+  在 `src-tauri/Cargo.toml` 显式将 `custom-protocol = ["tauri/custom-protocol"]` 纳入默认特性，
+  彻底内嵌前端全量静态资产。
 - **rustls CryptoProvider 未安装导致启动 panic**：依赖树里 `hyper-rustls` 用 `aws-lc-rs`、
   `reqwest` 用 `ring`，两个 provider 同时启用时 rustls 0.23 无法自动判定，
   `ServerConfig::builder()` 直接 panic。新增 `tls::install_crypto_provider()`（`Once` 保护），
