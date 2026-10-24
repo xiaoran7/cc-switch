@@ -403,50 +403,56 @@ pub fn run() {
 
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            log::info!("=== Single Instance Callback Triggered ===");
-            log::debug!("Args count: {}", args.len());
-            for (i, arg) in args.iter().enumerate() {
-                log::debug!("  arg[{i}]: {}", url_for_log(arg));
-            }
-
-            if crate::lightweight::is_lightweight_mode() {
-                if let Err(e) = crate::lightweight::exit_lightweight_mode(app) {
-                    log::error!("退出轻量模式重建窗口失败: {e}");
+        let allow_multi = std::env::var_os("CC_SWITCH_MULTI_INSTANCE").is_some()
+            || std::env::var_os("CC_SWITCH_TEST_HOME").is_some();
+        if !allow_multi {
+            builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+                log::info!("=== Single Instance Callback Triggered ===");
+                log::debug!("Args count: {}", args.len());
+                for (i, arg) in args.iter().enumerate() {
+                    log::debug!("  arg[{i}]: {}", url_for_log(arg));
                 }
-            }
 
-            // Check for deep link URL in args (mainly for Windows/Linux command line)
-            let mut found_deeplink = false;
-            for arg in &args {
-                if handle_deeplink_url(app, arg, false, "single_instance args") {
-                    found_deeplink = true;
-                    break;
+                if crate::lightweight::is_lightweight_mode() {
+                    if let Err(e) = crate::lightweight::exit_lightweight_mode(app) {
+                        log::error!("退出轻量模式重建窗口失败: {e}");
+                    }
                 }
-            }
 
-            if !found_deeplink {
-                log::info!("ℹ No deep link URL found in args (this is expected on macOS when launched via system)");
-            }
+                // Check for deep link URL in args (mainly for Windows/Linux command line)
+                let mut found_deeplink = false;
+                for arg in &args {
+                    if handle_deeplink_url(app, arg, false, "single_instance args") {
+                        found_deeplink = true;
+                        break;
+                    }
+                }
 
-            // Show and focus window regardless
-            if let Some(window) = app.get_webview_window("main") {
-                // 防御性重置 Windows 的 skip_taskbar：single_instance 触发时，
-                // 原进程可能因 silent_startup / 关闭到托盘等处于 skip_taskbar(true) 状态，
-                // 仅 show() 不会重置该状态，会导致窗口可见但不在任务栏、最小化后消失。
-                #[cfg(target_os = "windows")]
-                {
-                    let _ = window.set_skip_taskbar(false);
+                if !found_deeplink {
+                    log::info!("ℹ No deep link URL found in args (this is expected on macOS when launched via system)");
                 }
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-                #[cfg(target_os = "linux")]
-                {
-                    linux_fix::nudge_main_window(window.clone(), "single-instance");
+
+                // Show and focus window regardless
+                if let Some(window) = app.get_webview_window("main") {
+                    // 防御性重置 Windows 的 skip_taskbar：single_instance 触发时，
+                    // 原进程可能因 silent_startup / 关闭到托盘等处于 skip_taskbar(true) 状态，
+                    // 仅 show() 不会重置该状态，会导致窗口可见但不在任务栏、最小化后消失。
+                    #[cfg(target_os = "windows")]
+                    {
+                        let _ = window.set_skip_taskbar(false);
+                    }
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    #[cfg(target_os = "linux")]
+                    {
+                        linux_fix::nudge_main_window(window.clone(), "single-instance");
+                    }
                 }
-            }
-        }));
+            }));
+        } else {
+            log::info!("多实例/预览模式已启用，跳过 single_instance 拦截");
+        }
     }
 
     #[cfg(target_os = "windows")]
@@ -1740,6 +1746,7 @@ pub fn run() {
             commands::get_proxy_tls_cert,
             commands::set_proxy_tls_cert,
             commands::get_proxy_endpoints_info,
+            commands::delete_custom_listen_host,
             commands::get_proxy_config_for_app,
             commands::update_proxy_config_for_app,
             commands::get_pricing_model_source,

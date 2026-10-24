@@ -77,7 +77,11 @@ pub(crate) fn proxy_origin(host: &str, listen_port: u16) -> String {
         "::" => "::1",
         other => other,
     };
-    let scheme = if is_loopback_host(host) { "http" } else { "https" };
+    let scheme = if is_loopback_host(host) {
+        "http"
+    } else {
+        "https"
+    };
     if host.contains(':') && !host.starts_with('[') {
         format!("{scheme}://[{host}]:{listen_port}")
     } else {

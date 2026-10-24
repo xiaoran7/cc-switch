@@ -68,11 +68,15 @@ impl TlsMaterial {
             }
             if candidates.len() == 1 {
                 let (c, k) = candidates.remove(0);
-                log::info!("[ProxyTLS] 自动匹配到 tls 目录下的唯一证书对: {}", c.display());
+                log::info!(
+                    "[ProxyTLS] 自动匹配到 tls 目录下的唯一证书对: {}",
+                    c.display()
+                );
                 return Some(Self { cert: c, key: k });
-            } else if let Some((c, k)) = candidates.into_iter().find(|(c, _)| {
-                c.to_string_lossy().contains(".ts.net")
-            }) {
+            } else if let Some((c, k)) = candidates
+                .into_iter()
+                .find(|(c, _)| c.to_string_lossy().contains(".ts.net"))
+            {
                 log::info!("[ProxyTLS] 自动匹配到 tailnet 证书对: {}", c.display());
                 return Some(Self { cert: c, key: k });
             }
@@ -89,8 +93,8 @@ impl TlsMaterial {
 
 /// 读 PEM 证书链。返回全部证书，第一张是叶子证书。
 fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>, String> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| format!("打开证书失败 {}: {e}", path.display()))?;
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("打开证书失败 {}: {e}", path.display()))?;
     let mut reader = BufReader::new(file);
     let certs = rustls_pemfile::certs(&mut reader)
         .collect::<Result<Vec<_>, _>>()
@@ -103,8 +107,8 @@ fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>, String> {
 
 /// 读 PEM 私钥。支持 PKCS#8 / PKCS#1 / SEC1 三种编码。
 fn load_key(path: &Path) -> Result<PrivateKeyDer<'static>, String> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| format!("打开私钥失败 {}: {e}", path.display()))?;
+    let file =
+        std::fs::File::open(path).map_err(|e| format!("打开私钥失败 {}: {e}", path.display()))?;
     let mut reader = BufReader::new(file);
     let key = rustls_pemfile::private_key(&mut reader)
         .map_err(|e| format!("解析私钥失败 {}: {e}", path.display()))?
@@ -227,15 +231,29 @@ mod tests {
         let key = dir.join("probe.test.key");
         let status = std::process::Command::new("openssl")
             .args([
-                "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-                "-keyout", key.to_str()?, "-out", crt.to_str()?,
-                "-days", "1", "-subj", "/CN=probe.test",
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-keyout",
+                key.to_str()?,
+                "-out",
+                crt.to_str()?,
+                "-days",
+                "1",
+                "-subj",
+                "/CN=probe.test",
                 // 默认生成的 x509 带 CA:TRUE，rustls 会拒绝「把 CA 当叶子证书」，
                 // 这里明确标成终端实体证书。
-                "-addext", "subjectAltName=DNS:probe.test",
-                "-addext", "basicConstraints=critical,CA:FALSE",
-                "-addext", "keyUsage=critical,digitalSignature,keyEncipherment",
-                "-addext", "extendedKeyUsage=serverAuth",
+                "-addext",
+                "subjectAltName=DNS:probe.test",
+                "-addext",
+                "basicConstraints=critical,CA:FALSE",
+                "-addext",
+                "keyUsage=critical,digitalSignature,keyEncipherment",
+                "-addext",
+                "extendedKeyUsage=serverAuth",
             ])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -258,9 +276,15 @@ mod tests {
             return;
         };
 
-        let acceptor = build_acceptor(&TlsMaterial { cert: crt.clone(), key }).expect("构造 acceptor");
+        let acceptor = build_acceptor(&TlsMaterial {
+            cert: crt.clone(),
+            key,
+        })
+        .expect("构造 acceptor");
 
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
@@ -286,7 +310,10 @@ mod tests {
         let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
         let server_name =
             tokio_rustls::rustls::pki_types::ServerName::try_from("probe.test").unwrap();
-        let mut tls = connector.connect(server_name, tcp).await.expect("客户端握手");
+        let mut tls = connector
+            .connect(server_name, tcp)
+            .await
+            .expect("客户端握手");
 
         tls.write_all(b"ping\n").await.unwrap();
         let mut out = Vec::new();
@@ -311,7 +338,9 @@ mod tests {
         };
 
         let acceptor = build_acceptor(&TlsMaterial { cert: crt, key }).expect("构造 acceptor");
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             if let Ok((stream, _)) = listener.accept().await {

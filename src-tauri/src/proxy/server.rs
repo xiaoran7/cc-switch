@@ -105,23 +105,24 @@ impl ProxyServer {
             return Err(ProxyError::AlreadyRunning);
         }
 
-        let addr: SocketAddr = match format!("{}:{}", self.config.listen_address, self.config.listen_port)
-            .parse::<SocketAddr>()
-        {
-            Ok(addr) => addr,
-            Err(_) => {
-                // 如果是域名（如 node.example.ts.net），通过 DNS 解析出有效地址
-                let mut addrs = tokio::net::lookup_host(format!(
-                    "{}:{}",
-                    self.config.listen_address, self.config.listen_port
-                ))
-                .await
-                .map_err(|e| ProxyError::BindFailed(format!("无法解析监听地址: {e}")))?;
-                addrs.next().ok_or_else(|| {
-                    ProxyError::BindFailed("监听地址未解析出任何有效 IP".to_string())
-                })?
-            }
-        };
+        let addr: SocketAddr =
+            match format!("{}:{}", self.config.listen_address, self.config.listen_port)
+                .parse::<SocketAddr>()
+            {
+                Ok(addr) => addr,
+                Err(_) => {
+                    // 如果是域名（如 node.example.ts.net），通过 DNS 解析出有效地址
+                    let mut addrs = tokio::net::lookup_host(format!(
+                        "{}:{}",
+                        self.config.listen_address, self.config.listen_port
+                    ))
+                    .await
+                    .map_err(|e| ProxyError::BindFailed(format!("无法解析监听地址: {e}")))?;
+                    addrs.next().ok_or_else(|| {
+                        ProxyError::BindFailed("监听地址未解析出任何有效 IP".to_string())
+                    })?
+                }
+            };
 
         // 创建关闭通道
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -159,7 +160,8 @@ impl ProxyServer {
         // 监听地址是非回环时，客户端拿到的会是 https:// 地址（见 services::proxy::proxy_origin），
         // 所以这里必须真的做 TLS 终结，否则客户端握手会失败。
         // 回环地址保持明文，不改变本机原有的零成本路径。
-        let tls_acceptor = if crate::services::proxy::is_loopback_host(&self.config.listen_address) {
+        let tls_acceptor = if crate::services::proxy::is_loopback_host(&self.config.listen_address)
+        {
             log::debug!("[ProxyTLS] 监听回环地址，使用明文 HTTP");
             None
         } else {
@@ -179,8 +181,7 @@ impl ProxyServer {
                     data_dir.display()
                 ))
             })?;
-            let acceptor = super::tls::build_acceptor(&material)
-                .map_err(ProxyError::BindFailed)?;
+            let acceptor = super::tls::build_acceptor(&material).map_err(ProxyError::BindFailed)?;
             log::info!(
                 "[ProxyTLS] 监听 {} 启用 TLS: cert={}",
                 self.config.listen_address,
@@ -489,7 +490,9 @@ impl ProxyServer {
 /// 在 hyper 解析前 peek 原始 TCP 字节，抓出请求头的原始大小写。
 ///
 /// 只对明文连接有意义：TLS 连接的字节流在握手前是 ClientHello，peek 不到 HTTP 头。
-async fn peek_header_cases(stream: &tokio::net::TcpStream) -> super::hyper_client::OriginalHeaderCases {
+async fn peek_header_cases(
+    stream: &tokio::net::TcpStream,
+) -> super::hyper_client::OriginalHeaderCases {
     let mut peek_buf = vec![0u8; 8192];
     match stream.peek(&mut peek_buf).await {
         Ok(n) => {
@@ -517,27 +520,22 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     // service_fn 将 axum Router（tower::Service）桥接到 hyper
-    let service = hyper::service::service_fn(
-        move |req: hyper::Request<hyper::body::Incoming>| {
-            let mut router = app.clone();
-            let cases = cases.clone();
-            async move {
-                // 将 hyper::body::Incoming 转为 axum::body::Body，保留 extensions
-                let (mut parts, body) = req.into_parts();
+    let service = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+        let mut router = app.clone();
+        let cases = cases.clone();
+        async move {
+            // 将 hyper::body::Incoming 转为 axum::body::Body，保留 extensions
+            let (mut parts, body) = req.into_parts();
 
-                // Insert our own header case map alongside hyper's internal one
-                parts.extensions.insert(cases);
+            // Insert our own header case map alongside hyper's internal one
+            parts.extensions.insert(cases);
 
-                let body = axum::body::Body::new(body);
-                let axum_req = http::Request::from_parts(parts, body);
-                <Router as tower::Service<http::Request<axum::body::Body>>>::call(
-                    &mut router,
-                    axum_req,
-                )
+            let body = axum::body::Body::new(body);
+            let axum_req = http::Request::from_parts(parts, body);
+            <Router as tower::Service<http::Request<axum::body::Body>>>::call(&mut router, axum_req)
                 .await
-            }
-        },
-    );
+        }
+    });
 
     if let Err(e) = hyper::server::conn::http1::Builder::new()
         .preserve_header_case(true)

@@ -262,11 +262,22 @@ pub async fn update_global_proxy_config(
     state: tauri::State<'_, AppState>,
     config: GlobalProxyConfig,
 ) -> Result<(), String> {
+    let listen_addr = config.listen_address.trim();
+    // 如果不是固定内置项（127.0.0.1, 0.0.0.0, localhost 等），自动保存进持久预设
+    if !crate::services::proxy::is_loopback_host(listen_addr) && listen_addr != "0.0.0.0" {
+        let _ = crate::settings::add_custom_listen_host(listen_addr);
+    }
     let restarted = state.proxy_service.update_global_config(&config).await?;
     if restarted {
         resync_proxy_clients(state.inner()).await?;
     }
     Ok(())
+}
+
+/// 删除用户自定义的监听地址预设
+#[tauri::command]
+pub async fn delete_custom_listen_host(host: String) -> Result<(), String> {
+    crate::settings::remove_custom_listen_host(&host).map_err(|e| e.to_string())
 }
 
 /// 获取客户端地址：写进客户端配置的代理主机，空表示按监听地址推。
@@ -320,6 +331,7 @@ pub async fn set_proxy_tls_cert(
 #[serde(rename_all = "camelCase")]
 pub struct HostOption {
     pub value: String,
+    pub kind: String,
     pub label: String,
     pub description: String,
     pub is_tls: bool,
@@ -345,7 +357,11 @@ pub struct ProxyEndpointsInfo {
 pub async fn get_proxy_endpoints_info(
     state: tauri::State<'_, AppState>,
 ) -> Result<ProxyEndpointsInfo, String> {
-    let global_config = state.db.get_global_proxy_config().await.map_err(|e| e.to_string())?;
+    let global_config = state
+        .db
+        .get_global_proxy_config()
+        .await
+        .map_err(|e| e.to_string())?;
     let listen_address = global_config.listen_address;
     let listen_port = global_config.listen_port;
     let client_host = crate::settings::get_proxy_client_host().filter(|h| !h.trim().is_empty());
@@ -356,12 +372,15 @@ pub async fn get_proxy_endpoints_info(
 
     let data_dir = crate::config::get_app_config_dir();
     let explicit = crate::settings::get_proxy_tls_cert();
-    let material = crate::proxy::tls::TlsMaterial::resolve(explicit.as_deref(), &data_dir, target_host);
+    let material =
+        crate::proxy::tls::TlsMaterial::resolve(explicit.as_deref(), &data_dir, target_host);
 
     let (cert_available, detected_cert_file, detected_cert_path) = match material {
         Some(mat) => (
             true,
-            mat.cert.file_name().map(|n| n.to_string_lossy().to_string()),
+            mat.cert
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string()),
             Some(mat.cert.to_string_lossy().to_string()),
         ),
         None => (false, None, None),
@@ -370,8 +389,9 @@ pub async fn get_proxy_endpoints_info(
     let mut available_hosts = Vec::new();
     available_hosts.push(HostOption {
         value: "127.0.0.1".to_string(),
-        label: "127.0.0.1 (本地回环 - 明文 HTTP)".to_string(),
-        description: "仅允许本机应用访问，无加密开销".to_string(),
+        kind: "loopback".to_string(),
+        label: "127.0.0.1 (Loopback)".to_string(),
+        description: "Local loopback interface".to_string(),
         is_tls: false,
     });
 
@@ -386,8 +406,9 @@ pub async fn get_proxy_endpoints_info(
                 if host_stem.contains(".ts.net") {
                     available_hosts.push(HostOption {
                         value: host_stem.to_string(),
-                        label: format!("{host_stem} (Tailscale 域名 - 开启 HTTPS 🔒)"),
-                        description: "经由 Tailscale 内网访问，公共 CA 证书保护".to_string(),
+                        kind: "tailscaleDomain".to_string(),
+                        label: format!("{host_stem} (Tailscale Domain)"),
+                        description: "Tailscale MagicDNS with public CA certificate".to_string(),
                         is_tls: true,
                     });
                     break;
@@ -414,31 +435,62 @@ pub async fn get_proxy_endpoints_info(
                     None
                 }
             })
-    }).await.ok().flatten();
+    })
+    .await
+    .ok()
+    .flatten();
 
     if let Some(ts_ip) = ts_ip_res {
         available_hosts.push(HostOption {
             value: ts_ip.clone(),
-            label: format!("{ts_ip} (Tailscale IP - 开启 HTTPS 🔒)"),
-            description: "Tailscale 内网 IP，自动适配 Tailnet 证书".to_string(),
+            kind: "tailscaleIp".to_string(),
+            label: format!("{ts_ip} (Tailscale IP)"),
+            description: "Tailscale internal IP".to_string(),
             is_tls: true,
         });
     }
 
     available_hosts.push(HostOption {
         value: "0.0.0.0".to_string(),
-        label: "0.0.0.0 (全部网卡)".to_string(),
-        description: "监听本机所有网络接口".to_string(),
+        kind: "all".to_string(),
+        label: "0.0.0.0 (All interfaces)".to_string(),
+        description: "Listen on all network interfaces".to_string(),
         is_tls: false,
     });
+
+    // 加载用户自定义的永久预设列表
+    let custom_hosts = crate::settings::get_custom_listen_hosts();
+    for host in custom_hosts {
+        if !available_hosts.iter().any(|h| h.value == host) {
+            let is_custom_tls = !crate::services::proxy::is_loopback_host(&host);
+            available_hosts.push(HostOption {
+                value: host.clone(),
+                kind: "customPreset".to_string(),
+                label: format!("{host} (Custom Preset)"),
+                description: if is_custom_tls {
+                    "User custom address with HTTPS"
+                } else {
+                    "User custom address"
+                }
+                .to_string(),
+                is_tls: is_custom_tls,
+            });
+        }
+    }
 
     // 如果当前配置的地址不在预设列表中，增加自定义项
     if !available_hosts.iter().any(|h| h.value == listen_address) {
         let is_custom_tls = !crate::services::proxy::is_loopback_host(&listen_address);
         available_hosts.push(HostOption {
             value: listen_address.clone(),
-            label: format!("{listen_address} (当前自定义配置)"),
-            description: if is_custom_tls { "非回环自定义地址 - 开启 HTTPS 🔒" } else { "自定义回环地址" }.to_string(),
+            kind: "customPreset".to_string(),
+            label: format!("{listen_address} (Custom)"),
+            description: if is_custom_tls {
+                "Non-loopback custom address with HTTPS"
+            } else {
+                "Custom loopback address"
+            }
+            .to_string(),
             is_tls: is_custom_tls,
         });
     }
