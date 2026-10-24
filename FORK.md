@@ -87,9 +87,20 @@ tailscale cert --cert-file "%USERPROFILE%\.cc-switch\tls\<host>.crt" \
 
 ```bash
 cd src-tauri
-cargo test --lib proxy::tls          # 3 个新增单测
-cargo test --lib                     # 全量 3937 个
+cargo test --lib proxy::tls          # 5 个单测（回环检测、URL协议推断、约定路径查找、真实TLS握手与传输、明文请求阻断）
+cargo test --lib                     # 全量库测试
 ```
+
+从远端 Linux 机器（如美西 `us-zenix`）全链路验证：
+```bash
+./scripts/verify-tailnet-proxy.sh portable-pc.tail462ee4.ts.net 15721 <claude_desktop_gateway_token>
+```
+验证包含 5 项硬性检查：
+1. MagicDNS 解析
+2. TCP 端口直连
+3. TLS 握手及公共 CA 根证书链校验（无需任何 `-k`）
+4. 证书 SAN 匹配
+5. 真实 POST `/claude-desktop/v1/messages` 收到 Anthropic 模型响应（实测 Gemini 3.8 Flash 正常返回）
 
 ## 已知限制
 

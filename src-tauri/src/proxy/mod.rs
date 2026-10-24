@@ -27,7 +27,7 @@ pub mod opaque_state_rectifier;
 pub mod provider_router;
 pub mod providers;
 pub mod response_processor;
-pub(crate) mod server;
+pub mod server;
 pub mod session;
 pub(crate) mod sse;
 pub(crate) mod switch_lock;
@@ -36,7 +36,7 @@ pub mod thinking_optimizer;
 pub mod thinking_rectifier;
 pub mod tls;
 pub(crate) mod tool_media;
-pub(crate) mod types;
+pub mod types;
 mod upstream_guard;
 pub mod usage;
 
