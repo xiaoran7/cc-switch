@@ -16,8 +16,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 doctest = false
 
 [features]
-default = []
+default = ["custom-protocol"]
 test-hooks = []
+custom-protocol = ["tauri/custom-protocol"]
 
 [build-dependencies]
 tauri-build = { version = "2.4.0", features = [] }
