@@ -41,7 +41,7 @@ mod pi_config;
 mod prompt;
 mod prompt_files;
 mod provider;
-mod proxy;
+pub mod proxy;
 mod services;
 mod session_manager;
 mod settings;

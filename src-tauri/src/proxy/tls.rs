@@ -54,6 +54,30 @@ impl TlsMaterial {
             return Some(Self { cert, key });
         }
 
+        // 自适应扫描：用户可能监听的是 100.x IP 或 0.0.0.0，但证书名是 tailnet 域名（如 portable-pc.tail462ee4.ts.net.crt）
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            let mut candidates = Vec::new();
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("crt") {
+                    let key_path = path.with_extension("key");
+                    if key_path.is_file() {
+                        candidates.push((path, key_path));
+                    }
+                }
+            }
+            if candidates.len() == 1 {
+                let (c, k) = candidates.remove(0);
+                log::info!("[ProxyTLS] 自动匹配到 tls 目录下的唯一证书对: {}", c.display());
+                return Some(Self { cert: c, key: k });
+            } else if let Some((c, k)) = candidates.into_iter().find(|(c, _)| {
+                c.to_string_lossy().contains(".ts.net")
+            }) {
+                log::info!("[ProxyTLS] 自动匹配到 tailnet 证书对: {}", c.display());
+                return Some(Self { cert: c, key: k });
+            }
+        }
+
         log::debug!(
             "[ProxyTLS] 未找到证书，尝试过: {} 与 {}",
             dir.join(format!("{host}.crt")).display(),
