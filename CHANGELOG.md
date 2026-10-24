@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`proxy_origin()` 按主机名选协议**：回环地址仍走 `http`（零开销，与上游一致），
   非回环一律 `https`。新增 `is_loopback_host()`，判定范围与桌面端的白名单对齐。
-- **监听地址域名解析支持**：`server.rs` 监听绑定支持域名主机名（如 `portable-pc.tail462ee4.ts.net`），
+- **监听地址域名解析支持**：`server.rs` 监听绑定支持域名主机名（如 `node.example.ts.net`），
   若不能直接解析为 SocketAddr 则走 `tokio::net::lookup_host` 解析后绑定。
 - **Tailnet 证书自适应匹配**：`TlsMaterial::resolve` 增加证书目录探测，若监听地址为 Tailnet IP 或泛地址，
   能自适应匹配目录下的唯一 `.ts.net` 证书对。

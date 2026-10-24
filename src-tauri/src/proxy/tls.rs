@@ -54,7 +54,7 @@ impl TlsMaterial {
             return Some(Self { cert, key });
         }
 
-        // 自适应扫描：用户可能监听的是 100.x IP 或 0.0.0.0，但证书名是 tailnet 域名（如 portable-pc.tail462ee4.ts.net.crt）
+        // 自适应扫描：用户可能监听的是 100.x IP 或 0.0.0.0，但证书名是 tailnet 域名（如 my-node.example.ts.net.crt）
         if let Ok(entries) = std::fs::read_dir(&dir) {
             let mut candidates = Vec::new();
             for entry in entries.flatten() {
@@ -166,10 +166,10 @@ mod tests {
         assert!(crate::services::proxy::is_loopback_host("[::1]"));
         assert!(crate::services::proxy::is_loopback_host("0.0.0.0"));
 
-        assert!(!crate::services::proxy::is_loopback_host("100.79.74.121"));
-        assert!(!crate::services::proxy::is_loopback_host("100.107.77.33"));
+        assert!(!crate::services::proxy::is_loopback_host("100.64.0.1"));
+        assert!(!crate::services::proxy::is_loopback_host("198.51.100.1"));
         assert!(!crate::services::proxy::is_loopback_host(
-            "portable-pc.tail462ee4.ts.net"
+            "my-node.example.ts.net"
         ));
     }
 
@@ -184,12 +184,12 @@ mod tests {
             "http://127.0.0.1:15721"
         );
         assert_eq!(
-            crate::services::proxy::proxy_origin("100.79.74.121", 15721),
-            "https://100.79.74.121:15721"
+            crate::services::proxy::proxy_origin("100.64.0.1", 15721),
+            "https://100.64.0.1:15721"
         );
         assert_eq!(
-            crate::services::proxy::proxy_origin("portable-pc.tail462ee4.ts.net", 15721),
-            "https://portable-pc.tail462ee4.ts.net:15721"
+            crate::services::proxy::proxy_origin("my-node.example.ts.net", 15721),
+            "https://my-node.example.ts.net:15721"
         );
         // IPv6 非回环要加方括号
         assert_eq!(
