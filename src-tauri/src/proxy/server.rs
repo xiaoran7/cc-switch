@@ -105,10 +105,23 @@ impl ProxyServer {
             return Err(ProxyError::AlreadyRunning);
         }
 
-        let addr: SocketAddr =
-            format!("{}:{}", self.config.listen_address, self.config.listen_port)
-                .parse()
-                .map_err(|e| ProxyError::BindFailed(format!("无效的地址: {e}")))?;
+        let addr: SocketAddr = match format!("{}:{}", self.config.listen_address, self.config.listen_port)
+            .parse::<SocketAddr>()
+        {
+            Ok(addr) => addr,
+            Err(_) => {
+                // 如果是域名（如 portable-pc.tail462ee4.ts.net），通过 DNS 解析出有效地址
+                let mut addrs = tokio::net::lookup_host(format!(
+                    "{}:{}",
+                    self.config.listen_address, self.config.listen_port
+                ))
+                .await
+                .map_err(|e| ProxyError::BindFailed(format!("无法解析监听地址: {e}")))?;
+                addrs.next().ok_or_else(|| {
+                    ProxyError::BindFailed("监听地址未解析出任何有效 IP".to_string())
+                })?
+            }
+        };
 
         // 创建关闭通道
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
