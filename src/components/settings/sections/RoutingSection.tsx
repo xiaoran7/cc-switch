@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/lib/toast";
 import {
   ChevronRight,
@@ -10,10 +10,15 @@ import {
   Globe,
   ShieldCheck,
   ShieldAlert,
+  Copy,
+  Check,
+  ListFilter,
+  X,
 } from "lucide-react";
 import type { AppId } from "@/lib/api";
 import { proxyApi } from "@/lib/api/proxy";
 import { useProvidersQuery } from "@/lib/query";
+import type { HostOption } from "@/types/proxy";
 import {
   useGlobalProxyConfig,
   useProxyClientHost,
@@ -84,7 +89,10 @@ const isValidListenAddress = (address: string): boolean => {
 
 const isLoopbackHost = (host: string): boolean => {
   const h = host.trim().replace(/\.$/, "");
-  if (h.toLowerCase() === "localhost" || h.toLowerCase().endsWith(".localhost")) {
+  if (
+    h.toLowerCase() === "localhost" ||
+    h.toLowerCase().endsWith(".localhost")
+  ) {
     return true;
   }
   if (h === "::1" || h === "::" || h === "[::1]" || h === "[::]") return true;
@@ -120,6 +128,44 @@ function formatUptime(seconds: number, t: TFunction) {
     : t("routingSettings.uptimeMinutes", { minutes: Math.max(minutes, 0) });
 }
 
+function getHostOptionLabel(host: HostOption, t: TFunction): string {
+  switch (host.kind) {
+    case "loopback":
+      return t(
+        "routingSettings.hostOptions.loopback",
+        "127.0.0.1 (本地回环 - 明文 HTTP)",
+      );
+    case "tailscaleDomain":
+      return t(
+        "routingSettings.hostOptions.tailscaleDomain",
+        `${host.value} (Tailscale 域名 - 开启 HTTPS)`,
+        { host: host.value },
+      );
+    case "tailscaleIp":
+      return t(
+        "routingSettings.hostOptions.tailscaleIp",
+        `${host.value} (Tailscale IP - 开启 HTTPS)`,
+        { ip: host.value },
+      );
+    case "all":
+      return t("routingSettings.hostOptions.all", "0.0.0.0 (全部网卡)");
+    case "customPreset":
+      return t(
+        "routingSettings.hostOptions.customPreset",
+        `${host.value} (自定义预设)`,
+        { address: host.value },
+      );
+    case "custom":
+      return t(
+        "routingSettings.hostOptions.custom",
+        `${host.value} (当前自定义配置)`,
+        { address: host.value },
+      );
+    default:
+      return host.label || host.value;
+  }
+}
+
 /**
  * 设置 → 本地路由（v7）：服务（状态、统计、启停、监听地址、请求日志）→ 正在使用路由的应用
  * → 全部回到直连 → 故障转移参数 → 整流与优化。进出路由在各应用页的模式 tab 里。
@@ -144,21 +190,51 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
   const [clientHostError, setClientHostError] = useState<string | null>(null);
   const [confirmExitAll, setConfirmExitAll] = useState(false);
   const [failoverApp, setFailoverApp] = useState<ProxyAppId>("claude");
+  const [copiedGateway, setCopiedGateway] = useState(false);
+  const queryClient = useQueryClient();
 
-  const availableHosts = endpointsInfo?.availableHosts ?? [
+  const fallbackHosts: HostOption[] = [
     {
       value: "127.0.0.1",
-      label: "127.0.0.1 (本地回环 - 明文 HTTP)",
-      description: "仅允许本机应用访问，无加密开销",
+      kind: "loopback",
+      label: "127.0.0.1 (Loopback)",
+      description: "Local loopback",
       isTls: false,
     },
     {
       value: "0.0.0.0",
-      label: "0.0.0.0 (全部网卡)",
-      description: "监听本机所有网络接口",
+      kind: "all",
+      label: "0.0.0.0 (All)",
+      description: "All interfaces",
       isTls: false,
     },
   ];
+
+  const availableHosts = endpointsInfo?.availableHosts ?? fallbackHosts;
+
+  const handleCopyGatewayUrl = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedGateway(true);
+      toast.success(t("routingSettings.copied", "已复制到剪贴板"));
+      setTimeout(() => setCopiedGateway(false), 2000);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleDeletePreset = async (hostToDelete: string) => {
+    try {
+      await proxyApi.deleteCustomListenHost(hostToDelete);
+      await queryClient.invalidateQueries({ queryKey: ["proxy", "endpoints"] });
+      toast.success(t("routingSettings.presetDeleted", "已删除预设"));
+      if (address === hostToDelete && config?.listenAddress !== hostToDelete) {
+        setAddress("127.0.0.1");
+      }
+    } catch (err) {
+      toast.error(String(err));
+    }
+  };
 
   useEffect(() => {
     if (config) {
@@ -169,7 +245,9 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
 
   useEffect(() => {
     if (config && availableHosts.length > 0) {
-      const isPreset = availableHosts.some((h) => h.value === config.listenAddress);
+      const isPreset = availableHosts.some(
+        (h) => h.value === config.listenAddress,
+      );
       setIsCustomAddress(!isPreset);
     }
   }, [config, availableHosts]);
@@ -180,7 +258,8 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
 
   const liveTargetHost = clientHost.trim() || address.trim() || "127.0.0.1";
   const liveIsTls = !isLoopbackHost(liveTargetHost);
-  const liveDisplayHost = liveTargetHost === "0.0.0.0" ? "127.0.0.1" : liveTargetHost;
+  const liveDisplayHost =
+    liveTargetHost === "0.0.0.0" ? "127.0.0.1" : liveTargetHost;
   const livePort = port.trim() || "15721";
   const liveEffectiveOrigin = `${liveIsTls ? "https" : "http"}://${
     liveDisplayHost.includes(":") && !liveDisplayHost.startsWith("[")
@@ -341,17 +420,52 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
           </div>
 
           <SettingsRow
-            label={t("routingSettings.listen")}
+            label={
+              <span className="whitespace-nowrap font-medium text-fg-1">
+                {t("routingSettings.listen")}
+              </span>
+            }
             control={
-              <div className="flex items-start gap-3">
-                <div className="space-y-1">
+              <div className="flex items-start gap-2.5">
+                <div className="space-y-1.5">
                   <span className="block text-caption font-medium text-fg-2">
                     {t("routingSettings.address")}
                   </span>
-                  <div className="flex items-center gap-2">
+                  {isCustomAddress ? (
+                    <div className="flex items-center gap-1.5 w-[260px]">
+                      <Input
+                        value={address}
+                        placeholder={t(
+                          "routingSettings.customAddressPlaceholder",
+                          "例如 192.168.1.100 或 node.example.ts.net",
+                        )}
+                        onChange={(event) => setAddress(event.target.value)}
+                        aria-invalid={addressError ? true : undefined}
+                        className="w-full h-9 font-mono text-xs rounded-lg"
+                        autoFocus
+                      />
+                      <Button
+                        variant="outline"
+                        size="compact"
+                        type="button"
+                        onClick={() => {
+                          setIsCustomAddress(false);
+                          setAddress("127.0.0.1");
+                          setAddressError(null);
+                        }}
+                        title={t(
+                          "routingSettings.backToPresets",
+                          "切换回预设列表",
+                        )}
+                        className="h-9 px-2 text-xs text-fg-2 hover:text-fg-1 rounded-lg shrink-0 border border-border/80 hover:bg-subtle"
+                      >
+                        <ListFilter className="h-3.5 w-3.5 mr-1" />
+                        {t("routingSettings.presets", "预设")}
+                      </Button>
+                    </div>
+                  ) : (
                     <Select
                       value={
-                        !isCustomAddress &&
                         availableHosts.some((h) => h.value === address)
                           ? address
                           : "custom"
@@ -366,17 +480,46 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
                         }
                       }}
                     >
-                      <SelectTrigger className="w-[300px]">
-                        <SelectValue placeholder={t("routingSettings.address")} />
+                      <SelectTrigger className="w-[260px] h-9 text-xs rounded-lg">
+                        <SelectValue
+                          placeholder={t("routingSettings.address")}
+                        />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent className="max-h-72">
                         {availableHosts.map((host) => (
                           <SelectItem key={host.value} value={host.value}>
-                            <div className="flex items-center justify-between gap-3 w-full pr-1">
-                              <span className="font-mono text-xs">{host.label}</span>
-                              {host.isTls ? (
-                                <Lock className="h-3 w-3 text-emerald-500 shrink-0" />
-                              ) : null}
+                            <div className="flex items-center justify-between gap-2.5 w-full pr-1">
+                              <span className="font-mono text-xs text-fg-1 truncate">
+                                {getHostOptionLabel(host, t)}
+                              </span>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {host.isTls ? (
+                                  <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 shrink-0">
+                                    <Lock className="h-2.5 w-2.5" />
+                                    HTTPS
+                                  </span>
+                                ) : null}
+                                {host.kind === "customPreset" && (
+                                  <button
+                                    type="button"
+                                    onPointerDown={(e) => {
+                                      e.stopPropagation();
+                                    }}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      void handleDeletePreset(host.value);
+                                    }}
+                                    title={t(
+                                      "routingSettings.deletePreset",
+                                      "删除此预设",
+                                    )}
+                                    className="inline-flex items-center justify-center h-4 w-4 rounded text-fg-3 hover:text-danger-text hover:bg-danger/10 transition-colors cursor-pointer"
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           </SelectItem>
                         ))}
@@ -388,17 +531,7 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
                         </SelectItem>
                       </SelectContent>
                     </Select>
-
-                    {isCustomAddress && (
-                      <Input
-                        value={address}
-                        placeholder="例如 192.168.1.100"
-                        onChange={(event) => setAddress(event.target.value)}
-                        aria-invalid={addressError ? true : undefined}
-                        className="w-[180px] font-mono text-xs"
-                      />
-                    )}
-                  </div>
+                  )}
                   {addressError && (
                     <span className="block text-caption text-danger-text">
                       {addressError}
@@ -406,7 +539,7 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
                   )}
                 </div>
 
-                <label className="space-y-1">
+                <label className="space-y-1.5">
                   <span className="block text-caption font-medium text-fg-2">
                     {t("routingSettings.port")}
                   </span>
@@ -415,7 +548,7 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
                     inputMode="numeric"
                     onChange={(event) => setPort(event.target.value)}
                     aria-invalid={portError ? true : undefined}
-                    className="w-[96px] font-mono"
+                    className="w-[84px] h-9 font-mono text-xs rounded-lg"
                   />
                   <span
                     className={cn(
@@ -430,7 +563,7 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
                 <Button
                   variant="neutral"
                   size="regular"
-                  className="mt-[22px]"
+                  className="mt-[24px] h-9 rounded-lg px-3.5 text-xs whitespace-nowrap"
                   disabled={!listenDirty || updateConfig.isPending}
                   onClick={() => void saveListen()}
                 >
@@ -443,46 +576,80 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
             }
           >
             {/* 实时证书与网关状态条 */}
-            <div className="rounded-lg border border-border/80 bg-subtle/50 px-3.5 py-2.5 text-caption">
-              <div className="flex flex-wrap items-center justify-between gap-y-2 gap-x-4">
-                <div className="flex items-center gap-2.5">
+            <div className="rounded-xl border border-border/80 bg-subtle/40 dark:bg-subtle/20 p-3.5 shadow-2xs">
+              <div className="flex flex-wrap items-center justify-between gap-y-2.5 gap-x-4">
+                <div className="flex flex-wrap items-center gap-2.5 text-xs">
                   {liveIsTls ? (
-                    <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                      <Lock className="h-3 w-3" />
-                      HTTPS 终结模式
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                      <Lock className="h-3.5 w-3.5 shrink-0" />
+                      {t("routingSettings.httpsMode", "HTTPS 终结模式")}
                     </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium text-fg-3 border border-border">
-                      <Globe className="h-3 w-3" />
-                      HTTP 明文模式
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-fg-2 border border-border/80">
+                      <Globe className="h-3.5 w-3.5 shrink-0" />
+                      {t("routingSettings.httpMode", "HTTP 明文模式")}
                     </span>
                   )}
-                  <span className="text-fg-2">
+                  <span className="text-fg-2 flex items-center gap-1.5">
                     {liveIsTls ? (
                       endpointsInfo?.certAvailable ? (
-                        <span className="inline-flex items-center gap-1 text-fg-2">
-                          <ShieldCheck className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                          已检测到证书:{" "}
-                          <span className="font-mono font-medium text-fg-1">
-                            {endpointsInfo.detectedCertFile ?? "Tailscale 证书"}
+                        <span className="inline-flex items-center gap-1.5 text-fg-2">
+                          <ShieldCheck className="h-4 w-4 text-emerald-500 shrink-0" />
+                          <span>
+                            {t(
+                              "routingSettings.certDetected",
+                              "已检测到证书：",
+                            )}
                           </span>
+                          <code className="rounded-md bg-card dark:bg-muted/60 px-1.5 py-0.5 font-mono text-xs font-medium text-fg-1 border border-border/80">
+                            {endpointsInfo.detectedCertFile ??
+                              t(
+                                "routingSettings.defaultCertName",
+                                "Tailscale 证书",
+                              )}
+                          </code>
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 text-danger-text">
-                          <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
-                          未检测到有效证书（需在 .cc-switch/tls 目录下放置）
+                        <span className="inline-flex items-center gap-1.5 text-danger-text font-medium">
+                          <ShieldAlert className="h-4 w-4 shrink-0 text-danger-text" />
+                          {t(
+                            "routingSettings.noCertWarning",
+                            "未检测到有效证书（需在 .cc-switch/tls 目录下放置）",
+                          )}
                         </span>
                       )
                     ) : (
-                      "本地回环通信，无加密开销"
+                      <span className="text-fg-3">
+                        {t(
+                          "routingSettings.loopbackNotice",
+                          "本地回环通信，无加密开销",
+                        )}
+                      </span>
                     )}
                   </span>
                 </div>
-                <div className="flex items-center gap-1.5 text-fg-3">
-                  <span>写入客户端地址:</span>
-                  <code className="rounded bg-background px-1.5 py-0.5 font-mono text-[11px] text-fg-1 border border-border">
-                    {liveEffectiveOrigin}
-                  </code>
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-fg-3 font-medium">
+                    {t(
+                      "routingSettings.clientAddressPreview",
+                      "写入客户端地址：",
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void handleCopyGatewayUrl(liveEffectiveOrigin)
+                    }
+                    title={t("routingSettings.copyAddress", "复制网关地址")}
+                    className="group inline-flex items-center gap-1.5 rounded-lg border border-border/80 bg-background dark:bg-card px-2.5 py-1 font-mono text-xs text-fg-1 shadow-2xs hover:border-accent hover:bg-subtle transition-all cursor-pointer"
+                  >
+                    <span>{liveEffectiveOrigin}</span>
+                    {copiedGateway ? (
+                      <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5 text-fg-3 group-hover:text-fg-1 shrink-0 transition-colors" />
+                    )}
+                  </button>
                 </div>
               </div>
             </div>

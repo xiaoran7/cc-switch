@@ -459,15 +459,21 @@ pub fn run() {
 
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            log::info!("=== Single Instance Callback Triggered ===");
-            // Windows 上这个回调跑在主线程处理 WM_COPYDATA 的窗口过程里，第二个实例的
-            // SendMessage 正等它返回：轻量模式下要在这里同步重建主窗口，WebView2 会把主线程
-            // 卡死（托盘随之无响应）。挪到后台线程，建窗口改由事件循环处理，和 macOS / Linux
-            // 本来就不在主线程上调用一致。
-            let app = app.clone();
-            tauri::async_runtime::spawn_blocking(move || handle_second_instance(&app, args));
-        }));
+        let allow_multi = std::env::var_os("CC_SWITCH_MULTI_INSTANCE").is_some()
+            || std::env::var_os("CC_SWITCH_TEST_HOME").is_some();
+        if !allow_multi {
+            builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+                log::info!("=== Single Instance Callback Triggered ===");
+                // Windows 上这个回调跑在主线程处理 WM_COPYDATA 的窗口过程里，第二个实例的
+                // SendMessage 正等它返回：轻量模式下要在这里同步重建主窗口，WebView2 会把主线程
+                // 卡死（托盘随之无响应）。挪到后台线程，建窗口改由事件循环处理，和 macOS / Linux
+                // 本来就不在主线程上调用一致。
+                let app = app.clone();
+                tauri::async_runtime::spawn_blocking(move || handle_second_instance(&app, args));
+            }));
+        } else {
+            log::info!("多实例/预览模式已启用，跳过 single_instance 拦截");
+        }
     }
 
     #[cfg(target_os = "windows")]
@@ -1772,6 +1778,7 @@ pub fn run() {
             commands::get_proxy_tls_cert,
             commands::set_proxy_tls_cert,
             commands::get_proxy_endpoints_info,
+            commands::delete_custom_listen_host,
             commands::get_proxy_config_for_app,
             commands::update_proxy_config_for_app,
             commands::get_pricing_model_source,

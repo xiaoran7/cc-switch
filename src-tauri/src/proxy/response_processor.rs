@@ -158,7 +158,7 @@ pub fn is_sse_response(response: &ProxyResponse, request_is_stream: bool) -> boo
 }
 
 /// 处理流式响应
-pub async fn handle_streaming(
+pub(crate) async fn handle_streaming(
     response: ProxyResponse,
     ctx: &RequestContext,
     state: &ProxyState,
@@ -220,7 +220,7 @@ pub async fn handle_streaming(
 }
 
 /// 处理非流式响应
-pub async fn handle_non_streaming(
+pub(crate) async fn handle_non_streaming(
     response: ProxyResponse,
     ctx: &RequestContext,
     state: &ProxyState,
@@ -333,7 +333,7 @@ pub async fn handle_non_streaming(
 /// 通用响应处理入口
 ///
 /// 根据响应类型自动选择流式或非流式处理
-pub async fn process_response(
+pub(crate) async fn process_response(
     response: ProxyResponse,
     ctx: &RequestContext,
     state: &ProxyState,
@@ -728,7 +728,7 @@ async fn log_usage_internal(
 }
 
 /// 创建带日志记录和超时控制的透传流
-pub fn create_logged_passthrough_stream(
+pub(crate) fn create_logged_passthrough_stream(
     stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
     tag: &'static str,
     usage_collector: Option<SseUsageCollector>,
