@@ -2,16 +2,16 @@
 # 切换 cc-switch 代理的监听地址，并同步写进 Claude Desktop 的配置。
 #
 # 用法：
-#   ./set-proxy-address.sh tailnet    # 监听 + 客户端都用 MagicDNS 名，走 HTTPS
-#   ./set-proxy-address.sh loopback   # 回到 127.0.0.1，走明文 HTTP
-#   ./set-proxy-address.sh status     # 只看当前状态
+#   ./set-proxy-address.sh tailnet [host] # 监听 + 客户端都用 MagicDNS 名，走 HTTPS
+#   ./set-proxy-address.sh loopback      # 回到 127.0.0.1，走明文 HTTP
+#   ./set-proxy-address.sh status        # 只看当前状态
 #
 # 前提：tailnet 模式需要 <host>.crt/.key 已放在 ~/.cc-switch/tls/ 下
 #       （用 `tailscale cert` 签发）。
 set -euo pipefail
 
 DB="$HOME/.cc-switch/cc-switch.db"
-HOST="portable-pc.tail462ee4.ts.net"
+HOST="${2:-}"
 PORT=15721
 
 die() { printf '\033[31m错误: %s\033[0m\n' "$1" >&2; exit 1; }
@@ -85,6 +85,15 @@ PY
     ;;
 
   tailnet)
+    if [ -z "$HOST" ]; then
+      DETECTED="$(tailscale status --json 2>/dev/null | python -c 'import json,sys; print(json.load(sys.stdin).get("Self",{}).get("DNSName","").rstrip("."))' 2>/dev/null || true)"
+      if [ -n "$DETECTED" ]; then
+        HOST="$DETECTED"
+      else
+        die "未检测到本机 tailnet 域名，请显式传入: ./set-proxy-address.sh tailnet <host>"
+      fi
+    fi
+
     [ -f "$HOME/.cc-switch/tls/$HOST.crt" ] || die "缺证书 $HOST.crt，先跑 tailscale cert"
     [ -f "$HOME/.cc-switch/tls/$HOST.key" ] || die "缺私钥 $HOST.key"
 

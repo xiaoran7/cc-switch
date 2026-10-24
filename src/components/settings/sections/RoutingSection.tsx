@@ -64,7 +64,7 @@ const isValidListenAddress = (address: string): boolean => {
   if (/^(\d{1,3}\.){3}\d{1,3}$/.test(address)) {
     return address.split(".").every((part) => Number(part) <= 255);
   }
-  // 域名支持（如 portable-pc.tail462ee4.ts.net 或局域网主机名）
+  // 域名支持（如 my-node.ts.net 或局域网主机名）
   if (
     /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/i.test(
       address,

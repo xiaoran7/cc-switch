@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 从美西机验证本机 cc-switch 代理的 HTTPS 可达性。
+# 从远端机器验证宿主机 cc-switch 代理的 HTTPS 可达性。
 #
-# 用法（在 us-zenix 上跑）：
+# 用法（在远端节点上跑）：
 #   ./verify-tailnet-proxy.sh <host> <port> <api-key>
 #
 # 检查项：

@@ -110,7 +110,7 @@ impl ProxyServer {
         {
             Ok(addr) => addr,
             Err(_) => {
-                // 如果是域名（如 portable-pc.tail462ee4.ts.net），通过 DNS 解析出有效地址
+                // 如果是域名（如 node.example.ts.net），通过 DNS 解析出有效地址
                 let mut addrs = tokio::net::lookup_host(format!(
                     "{}:{}",
                     self.config.listen_address, self.config.listen_port

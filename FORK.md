@@ -8,8 +8,6 @@
 | 上游版本基线 | `v4.0.19`（commit `d8983bb10b82a1ccc15ae5f44ab070902623e990`） |
 | 上游协议 | MIT |
 | 上游作者 | Jason Young |
-| 本 Fork 仓库 | `git.tannerlab.xyz/tangwg/cc-switch` |
-| 本 Fork 维护者 | WANGUI TANG |
 | 本 Fork 分支 | `feat/tailnet-https` |
 
 **主权归属上游。** 除下方「本 Fork 改动的模块」一节列出的内容外，其余全部代码、文档、设计均属上游。
@@ -93,16 +91,16 @@ cargo test --lib proxy::tls          # 5 个单测（回环检测、URL协议推
 cargo test --lib                     # 全量库测试
 ```
 
-从远端 Linux 机器（如美西 `us-zenix`）全链路验证：
+从远端 Linux 机器（如远端开发节点）全链路验证：
 ```bash
-./scripts/verify-tailnet-proxy.sh portable-pc.tail462ee4.ts.net 15721 <claude_desktop_gateway_token>
+./scripts/verify-tailnet-proxy.sh <your-tailnet-host>.ts.net 15721 <claude_desktop_gateway_token>
 ```
 验证包含 5 项硬性检查：
 1. MagicDNS 解析
 2. TCP 端口直连
 3. TLS 握手及公共 CA 根证书链校验（无需任何 `-k`）
 4. 证书 SAN 匹配
-5. 真实 POST `/claude-desktop/v1/messages` 收到 Anthropic 模型响应（实测 Gemini 3.8 Flash 正常返回）
+5. 真实 POST `/claude-desktop/v1/messages` 收到 Anthropic 模型响应
 
 ## 已知限制
 
@@ -112,7 +110,7 @@ cargo test --lib                     # 全量库测试
 - **TLS 连接抓不到请求头原始大小写**：TLS 首包是 ClientHello，`peek` 不到 HTTP 头，
   所以 `preserve_header_case` 在 TLS 路径上退化为 hyper 默认行为。这会影响发往上游的
   header 大小写还原度，但对功能无影响（HTTP/1.1 头名大小写不敏感）。
-- **美西机不跑这个 Fork**：本 Fork 装在本机（Windows）。美西机只作为**客户端**验证连通性。
+- **远端机器不跑这个 Fork**：本 Fork 运行在宿主机上，远端机器仅作为**客户端**直连。
 
 ## 踩坑：rustls CryptoProvider 必须显式安装
 

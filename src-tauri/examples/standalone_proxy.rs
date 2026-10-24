@@ -26,14 +26,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = Arc::new(Database::init()?);
     println!("[STANDALONE] Database connected successfully.");
 
-    let port: u16 = std::env::args()
+    let host = std::env::args()
         .nth(1)
+        .or_else(|| std::env::var("HOST").ok())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+
+    let port: u16 = std::env::args()
+        .nth(2)
         .and_then(|s| s.parse().ok())
         .or_else(|| std::env::var("PORT").ok().and_then(|s| s.parse().ok()))
         .unwrap_or(15721);
 
     let config = ProxyConfig {
-        listen_address: "portable-pc.tail462ee4.ts.net".to_string(),
+        listen_address: host,
         listen_port: port,
         ..ProxyConfig::default()
     };
