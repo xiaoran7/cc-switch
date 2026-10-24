@@ -11,6 +11,7 @@ import type {
   CodexDaemonRestartOutcome,
   AppModeView,
   StartupAttachFailure,
+  ProxyEndpointsInfo,
 } from "@/types/proxy";
 
 export const proxyApi = {
@@ -129,6 +130,11 @@ export const proxyApi = {
   // 获取全局代理配置
   async getGlobalProxyConfig(): Promise<GlobalProxyConfig> {
     return invoke("get_global_proxy_config");
+  },
+
+  // 获取代理端点及 TLS 状态信息
+  async getProxyEndpointsInfo(): Promise<ProxyEndpointsInfo> {
+    return invoke("get_proxy_endpoints_info");
   },
 
   // 更新全局代理配置

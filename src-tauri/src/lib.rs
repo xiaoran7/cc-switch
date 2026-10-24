@@ -1739,6 +1739,7 @@ pub fn run() {
             commands::set_proxy_client_host,
             commands::get_proxy_tls_cert,
             commands::set_proxy_tls_cert,
+            commands::get_proxy_endpoints_info,
             commands::get_proxy_config_for_app,
             commands::update_proxy_config_for_app,
             commands::get_pricing_model_source,
