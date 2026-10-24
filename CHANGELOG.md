@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **前端监听地址预设下拉与实时证书状态条**：设置页「本地路由」的监听地址升级为预设下拉选择（支持本地回环、Tailscale 域名、Tailscale IP、全部网卡及自定义输入），下方直观展示当前协议（HTTP/HTTPS 🔒）、检测到的证书文件及写入客户端的完整网关 URL，消除配置黑盒。
+- **`get_proxy_endpoints_info` 接口**：探测网络接口、Tailscale IP 及已签发的 Tailnet 证书，向前端提供候选选项与实时 TLS 状态。
 - **代理 TLS 终结**：监听地址为非回环时，代理自动启用 TLS。证书按 `proxy_tls_cert` 设置项
   → `<应用数据目录>/tls/<主机>.crt|.key` 的顺序查找。找不到证书时**不静默降级成明文**，
   启动直接失败并给出 `tailscale cert` 的签发提示。

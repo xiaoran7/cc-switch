@@ -1,3 +1,22 @@
+export interface HostOption {
+  value: string;
+  label: string;
+  description: string;
+  isTls: boolean;
+}
+
+export interface ProxyEndpointsInfo {
+  listenAddress: string;
+  listenPort: number;
+  clientHost?: string;
+  effectiveOrigin: string;
+  isTls: boolean;
+  detectedCertFile?: string;
+  detectedCertPath?: string;
+  certAvailable: boolean;
+  availableHosts: HostOption[];
+}
+
 export interface ProxyConfig {
   listen_address: string;
   listen_port: number;

@@ -17,6 +17,7 @@ export const proxyKeys = {
   takeoverStatus: ["proxyTakeoverStatus"] as const,
   globalConfig: ["globalProxyConfig"] as const,
   clientHost: ["proxyClientHost"] as const,
+  endpointsInfo: ["proxyEndpointsInfo"] as const,
   appConfig: (appType: string) => ["appProxyConfig", appType] as const,
 };
 
@@ -276,6 +277,17 @@ export function useGlobalProxyConfig() {
 }
 
 /**
+ * 获取代理端点及 TLS 状态
+ */
+export function useProxyEndpointsInfo() {
+  return useQuery({
+    queryKey: proxyKeys.endpointsInfo,
+    queryFn: () => proxyApi.getProxyEndpointsInfo(),
+    staleTime: 5000,
+  });
+}
+
+/**
  * 更新全局代理配置
  */
 export function useUpdateGlobalProxyConfig() {
@@ -289,6 +301,7 @@ export function useUpdateGlobalProxyConfig() {
       toast.success(t("proxy.settings.toast.saved"), { closeButton: true });
       queryClient.invalidateQueries({ queryKey: proxyKeys.globalConfig });
       queryClient.invalidateQueries({ queryKey: proxyKeys.status });
+      queryClient.invalidateQueries({ queryKey: proxyKeys.endpointsInfo });
     },
     onError: (error: Error) => {
       toast.error(
@@ -319,6 +332,8 @@ export function useSetProxyClientHost() {
     mutationFn: (host: string) => proxyApi.setProxyClientHost(host),
     onSuccess: () => {
       toast.success(t("proxy.settings.toast.saved"), { closeButton: true });
+      queryClient.invalidateQueries({ queryKey: proxyKeys.clientHost });
+      queryClient.invalidateQueries({ queryKey: proxyKeys.endpointsInfo });
     },
     onError: (error: Error) => {
       toast.error(
