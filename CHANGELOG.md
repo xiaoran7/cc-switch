@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- FORK-NOTICE: 以下条目属于本地 Fork，不属于上游。上游条目一律从 "## [4.0.25]" 开始。 -->
 
+## [4.0.25+tailnet.3] - 2026-11-03
+
+跟进上游 `v4.0.25`。上游这一版**依然没有** HTTPS 支持：`proxy_origin()` 仍无条件拼
+`http://`，也没有 `tls.rs`，所以 Fork 的 TLS 终结和域名监听继续保留。
+
+### Changed
+
+- **同步上游 `v4.0.25`**：七个 Fork 提交 rebase 到 `v4.0.25`，冲突只有 CHANGELOG 与
+  三处版本号。
+- **版本号改为 `4.0.25+tailnet.3`**：`package.json` / `Cargo.toml` / `Cargo.lock` /
+  `tauri.conf.json` 四处同步。
+
+## [4.0.24+tailnet.2] - 2026-11-02
+
+把 Fork 重新基线到上游 `v4.0.24`（数据库 schema 23 → 24，旧版不再能打开新库），
+并堵死"官方更新把带 Tailnet HTTPS 的二进制覆盖回上游版本"这条反复踩的坑。
+
+起因：2026-11-02 官方更新在运行中把安装目录的二进制换成了上游 4.0.24，上游既没有 TLS 终结
+也没有域名监听，启动时直接报 `invalid socket address syntax`，监听地址被退回 `127.0.0.1`，
+Tailnet HTTPS 路由整条断掉。
+
+### Changed
+
+- **同步上游 `v4.0.24`**：六个 Fork 提交 rebase 到 `v4.0.24`，冲突集中在 `lib.rs`
+  （上游把单实例回调抽成 `handle_second_instance()`）与 `proxy/mod.rs`（上游新增
+  `upstream_guard`）。多实例开关在新的上游结构上重新接好，语义不变。
+- **版本号改为 `4.0.24+tailnet.2`**：`package.json` / `Cargo.toml` / `tauri.conf.json` 三处同步，
+  安装列表里能一眼分清这是 Fork 而不是官方版。
+- **前端新增 `yaml` 依赖**（上游 4.0.24 引入）。
+
+### Fixed
+
+- **官方更新覆盖 Fork 二进制**：`tauri.conf.json` 的 `plugins.updater.endpoints` 清空，
+  上游 updater 在端点为空时返回 `EmptyEndpoints`，不再下载安装包。`checkForUpdate()`
+  把这个错误识别成新增的 `disabled` 状态，UI 按"已是最新"静默处理，不会弹错误。
+  **代价**：不再自动跟进上游，需要手动 rebase + 重编（见 FORK.md）。
+
 ## [4.0.19+tailnet.1] - 2026-10-24
 
 本 Fork 补上非回环监听地址的 HTTPS 支持。上游的 `proxy_origin()` 无条件拼 `http://`，
