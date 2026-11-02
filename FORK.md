@@ -5,13 +5,38 @@
 | 项 | 值 |
 |---|---|
 | 上游仓库 | [farion1231/cc-switch](https://github.com/farion1231/cc-switch) |
-| 上游版本基线 | `v4.0.19`（commit `d8983bb10b82a1ccc15ae5f44ab070902623e990`） |
+| 上游版本基线 | `v4.0.24` |
 | 上游协议 | MIT |
 | 上游作者 | Jason Young |
 | 本 Fork 分支 | `feat/tailnet-https` |
+| 本 Fork 版本号 | `4.0.24+tailnet.2` |
 
 **主权归属上游。** 除下方「本 Fork 改动的模块」一节列出的内容外，其余全部代码、文档、设计均属上游。
-本 Fork 不做无记录魔改；上游发布新版时按 `git fetch upstream && git rebase upstream/main` 跟进。
+本 Fork 不做无记录魔改；上游发布新版时按
+`git fetch upstream --tags && git rebase --onto <新 tag> <上个基线 tag> feat/tailnet-https` 跟进。
+
+## ⚠️ 自动更新已禁用（防止被官方版覆盖）
+
+上游更新器会把安装目录里的二进制换成官方发布版，而上游**至今没有** TLS 终结和域名监听。
+2026-11-02 就是这么丢的：官方 4.0.24 在运行中被装上，启动报
+`invalid socket address syntax`，监听地址退回 `127.0.0.1`，Tailnet HTTPS 整条断掉。
+
+因此 `src-tauri/tauri.conf.json` 的 `plugins.updater.endpoints` 已被**清空**：
+
+```json
+"updater": { "pubkey": "...", "endpoints": [] }
+```
+
+上游 updater 在端点为空时返回 `EmptyEndpoints`，不会下载任何安装包。前端
+`checkForUpdate()` 把这个错误映射为 `disabled`，与"已是最新"同样静默处理。
+
+**后果与义务**：本 Fork 不再自动跟进上游，必须手动 rebase + 重编 + 重装。
+需要临时恢复官方端点时：
+
+```
+https://dl.ccswitch.io/latest.json
+https://github.com/farion1231/cc-switch/releases/latest/download/latest.json
+```
 
 ## 本 Fork 改动的模块
 

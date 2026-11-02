@@ -68,6 +68,8 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     try {
       const result = await checkForUpdate({ timeout: 30000 });
 
+      // disabled：Fork 构建清空了 updater endpoints（官方更新会覆盖掉 Tailnet HTTPS 支持），
+      // 与"已是最新"走同一条静默路径，不报错也不提示。
       if (result.status === "available") {
         setHasUpdate(true);
         setUpdateInfo(result.info);
