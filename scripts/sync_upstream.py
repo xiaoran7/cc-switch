@@ -250,6 +250,16 @@ def run_tests() -> bool:
     return True
 
 
+def cleanup_build_artifacts() -> None:
+    """收尾清理编译缓存，避免 target 目录膨胀占用数十 GB 空间。"""
+    print("-> 正在收尾清理构建缓存 (cargo clean / dist)...")
+    run_cmd(["cargo", "clean", "--manifest-path", "src-tauri/Cargo.toml"], check=False)
+    dist_path = PROJECT_DIR / "dist"
+    if dist_path.exists():
+        shutil.rmtree(dist_path, ignore_errors=True)
+    print("🧹 构建缓存与临时文件已清理完毕。")
+
+
 def sync_upstream(
     target: str = "upstream/main",
     fork_remote: str = "fork",
@@ -258,6 +268,7 @@ def sync_upstream(
     do_push: bool = True,
     do_tests: bool = True,
     check_only: bool = False,
+    do_clean: bool = True,
 ) -> int:
     print(f"=== CC Switch 上游同步开始 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ===")
 
@@ -377,6 +388,10 @@ def sync_upstream(
             print(f"❌ 推送失败：{err}", file=sys.stderr)
             return 1
 
+    # 11. 收尾清理缓存
+    if do_clean:
+        cleanup_build_artifacts()
+
     print(f"=== CC Switch 上游同步完成 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ===")
     return 0
 
@@ -389,6 +404,7 @@ def main() -> int:
     parser.add_argument("--upstream-remote", default="upstream", help="Remote name for upstream (default: upstream)")
     parser.add_argument("--no-push", action="store_true", help="Do not push to fork")
     parser.add_argument("--no-tests", action="store_true", help="Skip running tests")
+    parser.add_argument("--no-clean", action="store_true", help="Do not clean up build cache (target/dist)")
     parser.add_argument("--check-only", action="store_true", help="Only check for updates")
 
     args = parser.parse_args()
@@ -401,6 +417,7 @@ def main() -> int:
         do_push=not args.no_push,
         do_tests=not args.no_tests,
         check_only=args.check_only,
+        do_clean=not args.no_clean,
     )
 
 
