@@ -25,6 +25,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 
@@ -51,8 +52,18 @@ def run_cmd(
     merged_env = os.environ.copy()
     if env:
         merged_env.update(env)
+
+    exec_args = list(args)
+    use_shell = False
+    if sys.platform == "win32":
+        resolved = shutil.which(exec_args[0])
+        if resolved:
+            exec_args[0] = resolved
+            if resolved.lower().endswith((".cmd", ".bat")):
+                use_shell = True
+
     return subprocess.run(
-        args,
+        exec_args,
         cwd=cwd or PROJECT_DIR,
         check=check,
         capture_output=capture,
@@ -60,6 +71,7 @@ def run_cmd(
         encoding="utf-8",
         errors="replace",
         env=merged_env,
+        shell=use_shell,
     )
 
 
