@@ -5,11 +5,11 @@
 | 项 | 值 |
 |---|---|
 | 上游仓库 | [farion1231/cc-switch](https://github.com/farion1231/cc-switch) |
-| 上游版本基线 | `v4.0.24` |
+| 上游版本基线 | `v4.0.25` |
 | 上游协议 | MIT |
 | 上游作者 | Jason Young |
 | 本 Fork 分支 | `feat/tailnet-https` |
-| 本 Fork 版本号 | `4.0.24+tailnet.2` |
+| 本 Fork 版本号 | `4.0.25+tailnet.3` |
 
 **主权归属上游。** 除下方「本 Fork 改动的模块」一节列出的内容外，其余全部代码、文档、设计均属上游。
 本 Fork 不做无记录魔改；上游发布新版时按
@@ -30,7 +30,14 @@
 上游 updater 在端点为空时返回 `EmptyEndpoints`，不会下载任何安装包。前端
 `checkForUpdate()` 把这个错误映射为 `disabled`，与"已是最新"同样静默处理。
 
-**后果与义务**：本 Fork 不再自动跟进上游，必须手动 rebase + 重编 + 重装。
+**后果与义务**：本 Fork 不再自动跟进上游，改由自动化日常同步脚本维护：
+
+```bash
+python scripts/sync_upstream.py
+```
+
+该脚本会自动 fetch 上游、创建本地安全备份、执行 rebase、自动处理版本号与 CHANGELOG 冲突（通过 `scripts/resolve_conflicts.py`）、运行前端 typecheck 与 Rust 单元测试，并在成功后将最新分支推送到个人的 `fork/feat/tailnet-https` 远端。
+
 需要临时恢复官方端点时：
 
 ```
