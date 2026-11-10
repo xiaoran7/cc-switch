@@ -41,29 +41,69 @@ impl SavedProxyConfig {
     }
 }
 
+fn strip_brackets(host: &str) -> &str {
+    host.strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host)
+}
+
+/// 判断主机名是否仅指代本机回环接口（不包含 `0.0.0.0` / `::` 这类通配监听地址）。
+pub(crate) fn is_strict_loopback_host(host: &str) -> bool {
+    let host = strip_brackets(host.trim()).trim_end_matches('.');
+    if host.eq_ignore_ascii_case("localhost") || host.to_ascii_lowercase().ends_with(".localhost") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.to_canonical().is_loopback())
+}
+
+/// 判断主机名是否为通配监听地址（`0.0.0.0`、`::`、`[::]` 等未指定地址）。
+pub(crate) fn is_unspecified_host(host: &str) -> bool {
+    let host = strip_brackets(host.trim());
+    host.parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.to_canonical().is_unspecified())
+}
+
 /// 判断主机名是否属于回环范围（与 Claude Desktop 的 `allowLoopbackHttp` 白名单对齐）。
 ///
 /// Claude Desktop 对 `inferenceGatewayBaseUrl` 的校验是：`https` 任意主机都行，
 /// `http` 只放行 `127.0.0.1` / `localhost` / `[::1]` 这三个字面量。所以只要写出去的是
 /// 非回环地址，就必须用 `https`，否则桌面端在配置层就报
 /// `must use https (or http on loopback)`，连请求都发不出去。
+///
+/// 注意：`0.0.0.0` / `::` 在无 `proxy_client_host` 时会被 [`proxy_origin`] 改写成回环地址，
+/// 因此这里仍返回 `true`；监听层和安全守卫若需区分“真实回环”与“通配网卡”，请用
+/// [`is_strict_loopback_host`] 和 [`is_unspecified_host`]。
 pub(crate) fn is_loopback_host(host: &str) -> bool {
-    let host = host.trim().trim_end_matches('.');
-    if host.eq_ignore_ascii_case("localhost") || host.to_ascii_lowercase().ends_with(".localhost") {
-        return true;
+    is_strict_loopback_host(host) || is_unspecified_host(host)
+}
+
+/// 决定代理监听端口是否需要启用 TLS 终结，以及用来定位证书的目标主机名。
+///
+/// - 监听明确的非回环地址（如 `100.x`、`my-node.ts.net`）时必须启用 TLS：
+///   若同时配置了非回环 `client_host`，优先按 `client_host` 匹配证书，否则按 `listen_address`；
+/// - 监听通配地址（`0.0.0.0` / `::`）时，一旦配置了非回环 `client_host`（客户端拿到 `https://`），
+///   就必须启用 TLS 并按 `client_host` 匹配证书；未配 `client_host` 时客户端走 `http://127.0.0.1`，保持明文；
+/// - 监听严格回环地址（`127.0.0.1` / `::1` / `localhost`）时保持明文 HTTP，不影响本机直连与外部 TLS 转发。
+pub(crate) fn effective_tls_target_host(
+    listen_address: &str,
+    client_host: Option<&str>,
+) -> Option<String> {
+    let listen = listen_address.trim();
+    let client = client_host.map(str::trim).filter(|h| !h.is_empty());
+
+    if !is_loopback_host(listen) {
+        return match client {
+            Some(c) if !is_loopback_host(c) => Some(c.to_string()),
+            _ => Some(listen.to_string()),
+        };
     }
-    // IPv6 字面量：`[::1]` / `::1` / `::`
-    if let Some(inner) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
-        return matches!(inner, "::1" | "::");
+
+    if is_unspecified_host(listen) {
+        return client.filter(|c| !is_loopback_host(c)).map(str::to_string);
     }
-    if host == "::1" || host == "::" {
-        return true;
-    }
-    // IPv4：127.0.0.0/8 与 0.0.0.0
-    if let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
-        return ip.is_loopback() || ip.is_unspecified();
-    }
-    false
+
+    None
 }
 
 /// 客户端连接代理用的地址。`host` 是设置里的客户端地址，没设时是监听地址，后者可能是
@@ -72,9 +112,10 @@ pub(crate) fn is_loopback_host(host: &str) -> bool {
 /// 协议按主机名决定：回环用 `http`（桌面端只放行这一种），非回环一律 `https`——
 /// 这样 tailnet IP / MagicDNS 名这类"跨机但非公网"的地址才能通过桌面端的校验。
 pub(crate) fn proxy_origin(host: &str, listen_port: u16) -> String {
-    let host = match host {
+    let trimmed = host.trim();
+    let host = match trimmed {
         "0.0.0.0" => "127.0.0.1",
-        "::" => "::1",
+        "::" | "[::]" => "::1",
         other => other,
     };
     let scheme = if is_loopback_host(host) {
@@ -550,7 +591,7 @@ impl ProxyService {
             .await
     }
 
-    /// 证书路径变了之后重启代理服务器：TLS acceptor 只在 `start()` 里构造一次，
+    /// 证书路径或跨机客户端主机变了之后重启代理服务器：TLS acceptor 只在 `start()` 里构造一次，
     /// 不重启就换不掉。配置本身没动，所以把当前配置原样当 previous 传进去。
     pub async fn restart_for_tls_change(&self) -> Result<bool, String> {
         let current = self
@@ -558,6 +599,10 @@ impl ProxyService {
             .get_global_proxy_config()
             .await
             .map_err(|e| format!("获取全局代理配置失败: {e}"))?;
+        if self.is_running().await {
+            ProxyServer::prepare_tls_acceptor(&current.listen_address)
+                .map_err(|e| format!("重启代理服务器失败: {e}"))?;
+        }
         self.apply_saved_config(true, SavedProxyConfig::Global(current))
             .await
     }
@@ -822,5 +867,61 @@ mod tests {
         assert!(service.is_running().await);
         service.stop().await.unwrap();
         drop(blocker);
+    }
+
+    #[test]
+    fn host_classification_and_tls_target_rules() {
+        assert!(is_strict_loopback_host("127.0.0.1"));
+        assert!(is_strict_loopback_host("localhost."));
+        assert!(is_strict_loopback_host("app.localhost"));
+        assert!(is_strict_loopback_host("::1"));
+        assert!(is_strict_loopback_host("[::1]"));
+        assert!(!is_strict_loopback_host("0.0.0.0"));
+        assert!(!is_strict_loopback_host("::"));
+        assert!(!is_strict_loopback_host("[::]"));
+
+        assert!(is_unspecified_host("0.0.0.0"));
+        assert!(is_unspecified_host("::"));
+        assert!(is_unspecified_host("[::]"));
+        assert!(!is_unspecified_host("127.0.0.1"));
+
+        // `is_loopback_host` remains true for unspecified hosts for compatibility
+        assert!(is_loopback_host("0.0.0.0"));
+        assert!(is_loopback_host("::"));
+
+        // Wildcard listener + non-loopback client_host => enables TLS targeting client_host
+        assert_eq!(
+            effective_tls_target_host("0.0.0.0", Some("node.tail123.ts.net")),
+            Some("node.tail123.ts.net".to_string())
+        );
+        assert_eq!(
+            effective_tls_target_host("::", Some("100.64.0.1")),
+            Some("100.64.0.1".to_string())
+        );
+        // Wildcard listener without non-loopback client_host => plaintext HTTP
+        assert_eq!(effective_tls_target_host("0.0.0.0", None), None);
+        assert_eq!(effective_tls_target_host("0.0.0.0", Some("")), None);
+        assert_eq!(effective_tls_target_host("::", Some("127.0.0.1")), None);
+
+        // Strict loopback listener stays plaintext HTTP even with non-loopback client_host
+        // (supports reverse-proxy setups terminating TLS externally)
+        assert_eq!(
+            effective_tls_target_host("127.0.0.1", Some("100.64.0.1")),
+            None
+        );
+
+        // Explicit non-loopback listener enables TLS; prefers non-loopback client_host
+        assert_eq!(
+            effective_tls_target_host("100.64.0.1", None),
+            Some("100.64.0.1".to_string())
+        );
+        assert_eq!(
+            effective_tls_target_host("100.64.0.1", Some("node.tail123.ts.net")),
+            Some("node.tail123.ts.net".to_string())
+        );
+
+        assert_eq!(proxy_origin(" 0.0.0.0 ", 15721), "http://127.0.0.1:15721");
+        assert_eq!(proxy_origin("::", 15721), "http://[::1]:15721");
+        assert_eq!(proxy_origin("[::]", 15721), "http://[::1]:15721");
     }
 }

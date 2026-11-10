@@ -199,29 +199,88 @@ pub fn get() -> Client {
         })
 }
 
-/// 按目标地址取客户端：本机地址直连，其余同 [`get`]
+/// 按目标地址取客户端：本机、Tailnet 与局域网私网地址直连，其余同 [`get`]
 ///
-/// reqwest 不会自动绕开本机地址：配了全局代理时 `Proxy::all` 对所有目标生效，
+/// reqwest 不会自动绕开这些地址：配了全局代理时 `Proxy::all` 对所有目标生效，
 /// 跟随系统代理时也只认 `NO_PROXY` 环境变量（macOS 不读「不使用代理的主机」）。
-/// 本机推理服务因此会被送进代理，代理不能代连本机时请求就失败。
+/// 本机或 Tailnet / 局域网上的推理与中转服务因此会被送进外部代理，容易触发回环或连不上。
 pub fn get_for_url(url: &str) -> Client {
-    if is_loopback_url(url) {
+    if should_bypass_proxy_url(url) {
         direct_client()
     } else {
         get()
     }
 }
 
-/// 发往 `url` 时应使用的上游代理：本机地址返回 None（直连），其余返回当前全局代理
+/// 发往 `url` 时应使用的上游代理：本机、Tailnet 与局域网私网地址返回 None（直连），其余返回当前全局代理
 pub fn proxy_url_for(url: &str) -> Option<String> {
     upstream_proxy_for(url, get_current_proxy_url())
 }
 
 fn upstream_proxy_for(url: &str, current: Option<String>) -> Option<String> {
-    if is_loopback_url(url) {
+    if should_bypass_proxy_url(url) {
         None
     } else {
         current
+    }
+}
+
+/// 目标 URL 是否应绕过全局/系统上游代理直接连接：
+/// - 本机回环（`localhost`、`*.localhost`、`127.0.0.0/8`、`::1`）
+/// - Tailscale（`100.64.0.0/10`、`*.ts.net`、`fc00::/7` 含 `fd7a:115c:a1e0::/48`）
+/// - 局域网私网与链路本地（RFC1918 `10/8`、`172.16/12`、`192.168/16`，`169.254/16`，`fe80::/10`，`*.local`，`*.internal`）
+///
+/// 注意：保持 [`is_loopback_url`] 严格语义不变，避免改变自环检测等安全边界。
+pub fn should_bypass_proxy_url(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url.trim()) else {
+        return false;
+    };
+    match parsed.host() {
+        Some(url::Host::Domain(domain)) => host_bypasses_proxy(domain),
+        Some(url::Host::Ipv4(ip)) => ipv4_bypasses_proxy(ip),
+        Some(url::Host::Ipv6(ip)) => ipv6_bypasses_proxy(ip),
+        None => false,
+    }
+}
+
+fn ipv4_bypasses_proxy(ip: std::net::Ipv4Addr) -> bool {
+    let octets = ip.octets();
+    let is_tailnet_cgnat = octets[0] == 100 && (octets[1] & 0b1100_0000) == 64;
+    ip.is_loopback()
+        || ip.is_unspecified()
+        || ip.is_private()
+        || ip.is_link_local()
+        || is_tailnet_cgnat
+}
+
+fn ipv6_bypasses_proxy(ip: std::net::Ipv6Addr) -> bool {
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return ipv4_bypasses_proxy(v4);
+    }
+    ip.is_loopback() || ip.is_unspecified() || ip.is_unique_local() || ip.is_unicast_link_local()
+}
+
+fn host_bypasses_proxy(host: &str) -> bool {
+    let normalized = host
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+    if normalized == "localhost"
+        || [".localhost", ".ts.net", ".local", ".internal"]
+            .iter()
+            .any(|suffix| normalized.len() > suffix.len() && normalized.ends_with(suffix))
+    {
+        return true;
+    }
+    match normalized.parse::<IpAddr>() {
+        Ok(IpAddr::V4(v4)) => ipv4_bypasses_proxy(v4),
+        Ok(IpAddr::V6(v6)) => ipv6_bypasses_proxy(v6),
+        Err(_) => false,
     }
 }
 
@@ -505,6 +564,62 @@ mod tests {
         assert_eq!(
             upstream_proxy_for("https://api.example.com/v1/messages", None),
             None
+        );
+    }
+
+    #[test]
+    fn test_should_bypass_proxy_url_covers_tailnet_and_private_ranges() {
+        for url in [
+            "http://localhost:11434",
+            "http://127.0.0.1:8316/v1",
+            "http://[::1]:8000",
+            "http://100.64.0.1:8316/v1",
+            "https://100.127.255.254:8443/v1",
+            "https://my-node.tail1234.ts.net:15721/v1",
+            "https://[fd7a:115c:a1e0::1]:8316/v1",
+            "http://192.168.1.50:8316/v1",
+            "http://10.0.0.5:8080/v1",
+            "http://172.16.0.1:8080/v1",
+            "http://169.254.10.20:8080/v1",
+            "http://[::ffff:100.64.0.1]:8080/v1",
+            "http://host.docker.internal:15721",
+            "http://nas.local:8080",
+        ] {
+            assert!(
+                should_bypass_proxy_url(url),
+                "{url} should bypass upstream proxy"
+            );
+        }
+
+        for url in [
+            "https://api.anthropic.com/v1/messages",
+            "https://api.openai.com/v1/responses",
+            "http://100.63.255.255:8080",
+            "http://100.128.0.1:8080",
+            "http://172.15.255.255:8080",
+            "http://172.32.0.1:8080",
+            "https://ts.net.evil.example/v1",
+            "https://evilts.net/v1",
+            "not-a-url",
+        ] {
+            assert!(
+                !should_bypass_proxy_url(url),
+                "{url} should still use upstream proxy"
+            );
+        }
+
+        let current = Some("http://127.0.0.1:7897".to_string());
+        assert_eq!(
+            upstream_proxy_for("https://my-node.ts.net:8316/v1/messages", current.clone()),
+            None
+        );
+        assert_eq!(
+            upstream_proxy_for("http://100.72.34.104:8316/v1/messages", current.clone()),
+            None
+        );
+        assert_eq!(
+            upstream_proxy_for("https://api.anthropic.com/v1/messages", current.clone()),
+            current
         );
     }
 

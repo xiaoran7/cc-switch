@@ -101,11 +101,52 @@ impl ProxyServer {
         }
     }
 
+    pub(crate) fn prepare_tls_acceptor(
+        listen_address: &str,
+    ) -> Result<Option<tokio_rustls::TlsAcceptor>, ProxyError> {
+        let client_host = crate::settings::get_proxy_client_host();
+        match crate::services::proxy::effective_tls_target_host(
+            listen_address,
+            client_host.as_deref(),
+        ) {
+            None => {
+                log::debug!("[ProxyTLS] 监听本地回环或未配置跨机客户端地址，使用明文 HTTP");
+                Ok(None)
+            }
+            Some(tls_host) => {
+                let data_dir = crate::config::get_app_config_dir();
+                let explicit = crate::settings::get_proxy_tls_cert();
+                let material = super::tls::TlsMaterial::resolve(
+                    explicit.as_deref(),
+                    &data_dir,
+                    &tls_host,
+                )
+                .ok_or_else(|| {
+                    ProxyError::BindFailed(format!(
+                        "监听 {listen_address}（客户端 {tls_host}）需要 TLS，但找不到证书。请用 `tailscale cert {tls_host}` 签发，\
+                         或把证书放到 {}/tls/ 下",
+                        data_dir.display()
+                    ))
+                })?;
+                let acceptor =
+                    super::tls::build_acceptor(&material).map_err(ProxyError::BindFailed)?;
+                log::info!(
+                    "[ProxyTLS] 监听 {listen_address} (TLS 目标 {tls_host}) 启用 TLS: cert={}",
+                    material.cert.display()
+                );
+                Ok(Some(acceptor))
+            }
+        }
+    }
+
     pub async fn start(&self) -> Result<ProxyServerInfo, ProxyError> {
         // 检查是否已在运行
         if self.shutdown_tx.read().await.is_some() {
             return Err(ProxyError::AlreadyRunning);
         }
+
+        // 先校验并加载 TLS 材料：避免绑好端口、置位 running 之后才在证书校验处失败留下脏状态。
+        let tls_acceptor = Self::prepare_tls_acceptor(&self.config.listen_address)?;
 
         let addr: SocketAddr =
             match format!("{}:{}", self.config.listen_address, self.config.listen_port)
@@ -158,39 +199,6 @@ impl ProxyServer {
 
         // 记录启动时间
         *self.state.start_time.write().await = Some(std::time::Instant::now());
-
-        // 监听地址是非回环时，客户端拿到的会是 https:// 地址（见 services::proxy::proxy_origin），
-        // 所以这里必须真的做 TLS 终结，否则客户端握手会失败。
-        // 回环地址保持明文，不改变本机原有的零成本路径。
-        let tls_acceptor = if crate::services::proxy::is_loopback_host(&self.config.listen_address)
-        {
-            log::debug!("[ProxyTLS] 监听回环地址，使用明文 HTTP");
-            None
-        } else {
-            let data_dir = crate::config::get_app_config_dir();
-            let explicit = crate::settings::get_proxy_tls_cert();
-            let material = super::tls::TlsMaterial::resolve(
-                explicit.as_deref(),
-                &data_dir,
-                &self.config.listen_address,
-            )
-            .ok_or_else(|| {
-                ProxyError::BindFailed(format!(
-                    "监听 {} 需要 TLS，但找不到证书。请用 `tailscale cert {}` 签发，\
-                     或把证书放到 {}/tls/ 下",
-                    self.config.listen_address,
-                    self.config.listen_address,
-                    data_dir.display()
-                ))
-            })?;
-            let acceptor = super::tls::build_acceptor(&material).map_err(ProxyError::BindFailed)?;
-            log::info!(
-                "[ProxyTLS] 监听 {} 启用 TLS: cert={}",
-                self.config.listen_address,
-                material.cert.display()
-            );
-            Some(acceptor)
-        };
 
         // 启动服务器 — 使用手动 hyper HTTP/1.1 accept loop
         // 开启 preserve_header_case 以捕获客户端请求头的原始大小写
@@ -1548,6 +1556,163 @@ mod tests {
         assert_eq!(
             full_url_request.body["commands"]["search_query"][0]["q"],
             "full URL"
+        );
+    }
+
+    struct ScopedTestHome {
+        _dir: tempfile::TempDir,
+        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl ScopedTestHome {
+        fn new() -> Self {
+            let dir = tempfile::TempDir::new().expect("temp test home");
+            let saved = ["HOME", "USERPROFILE", "CC_SWITCH_TEST_HOME"]
+                .into_iter()
+                .map(|key| {
+                    let prev = std::env::var_os(key);
+                    std::env::set_var(key, dir.path());
+                    (key, prev)
+                })
+                .collect();
+            crate::settings::reload_settings().expect("reload settings");
+            Self { _dir: dir, saved }
+        }
+    }
+
+    impl Drop for ScopedTestHome {
+        fn drop(&mut self) {
+            for (key, prev) in self.saved.drain(..) {
+                match prev {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+            }
+            let _ = crate::settings::reload_settings();
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn wildcard_listener_with_non_loopback_client_host_serves_tls() {
+        let _home = ScopedTestHome::new();
+        let data_dir = crate::config::get_app_config_dir();
+        let tls_dir = data_dir.join("tls");
+        std::fs::create_dir_all(&tls_dir).unwrap();
+
+        let client_host = "proxy-test.tail123.ts.net";
+        let crt = tls_dir.join(format!("{client_host}.crt"));
+        let key = tls_dir.join(format!("{client_host}.key"));
+        let status = std::process::Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-keyout",
+                key.to_str().unwrap(),
+                "-out",
+                crt.to_str().unwrap(),
+                "-days",
+                "1",
+                "-subj",
+                &format!("/CN={client_host}"),
+                "-addext",
+                &format!("subjectAltName=DNS:{client_host},IP:127.0.0.1"),
+                "-addext",
+                "basicConstraints=critical,CA:FALSE",
+                "-addext",
+                "keyUsage=critical,digitalSignature,keyEncipherment",
+                "-addext",
+                "extendedKeyUsage=serverAuth",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let Ok(status) = status else {
+            eprintln!("跳过：系统没有 openssl");
+            return;
+        };
+        if !status.success() {
+            eprintln!("跳过：openssl 生成自签证书失败");
+            return;
+        }
+
+        crate::settings::set_proxy_client_host(client_host).expect("set proxy_client_host");
+
+        let db = Arc::new(Database::memory().expect("memory database"));
+        let proxy = ProxyServer::new(
+            ProxyConfig {
+                listen_address: "0.0.0.0".to_string(),
+                listen_port: 0,
+                ..ProxyConfig::default()
+            },
+            db,
+            None,
+        );
+        let info = proxy
+            .start()
+            .await
+            .expect("wildcard + client_host should start TLS");
+
+        // Plaintext HTTP must fail on the TLS-terminated wildcard listener
+        let plain_client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let plain_res = plain_client
+            .get(format!("http://127.0.0.1:{}/health", info.port))
+            .send()
+            .await;
+        assert!(
+            plain_res.is_err(),
+            "plaintext request must fail on TLS port"
+        );
+
+        // HTTPS trusting the generated cert succeeds
+        let pem = std::fs::read(&crt).unwrap();
+        let cert = reqwest::Certificate::from_pem(&pem).unwrap();
+        let https_client = reqwest::Client::builder()
+            .no_proxy()
+            .add_root_certificate(cert)
+            .build()
+            .unwrap();
+        let https_res = https_client
+            .get(format!("https://127.0.0.1:{}/health", info.port))
+            .send()
+            .await
+            .expect("HTTPS request should succeed");
+        assert_eq!(https_res.status(), StatusCode::OK);
+
+        proxy.stop().await.expect("stop TLS proxy");
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn wildcard_listener_with_client_host_fails_start_cleanly_without_cert() {
+        let _home = ScopedTestHome::new();
+        crate::settings::set_proxy_client_host("missing.tail123.ts.net")
+            .expect("set proxy_client_host");
+
+        let db = Arc::new(Database::memory().expect("memory database"));
+        let proxy = ProxyServer::new(
+            ProxyConfig {
+                listen_address: "0.0.0.0".to_string(),
+                listen_port: 0,
+                ..ProxyConfig::default()
+            },
+            db,
+            None,
+        );
+        let err = proxy
+            .start()
+            .await
+            .expect_err("missing TLS cert must fail start before binding");
+        assert!(
+            matches!(err, ProxyError::BindFailed(_)),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            !proxy.get_status().await.running,
+            "failed start must leave running == false"
         );
     }
 }

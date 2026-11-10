@@ -27,6 +27,7 @@ const CONFIG_FILE: &str = "claude_desktop_config.json";
 const CONFIG_LIBRARY_DIR: &str = "configLibrary";
 const GATEWAY_TOKEN_SETTING_KEY: &str = "claude_desktop_gateway_token";
 const CLAUDE_DESKTOP_PROXY_PREFIX: &str = "/claude-desktop";
+const SEALED_CREDENTIAL_PREFIX: &str = "__sealed__:";
 pub const DEFAULT_CREATED_AT: &str = "2024-01-01T00:00:00Z";
 /// `inferenceModels` 的上限（Desktop 的 schema 写着 `maxItems: 200`）。
 const MAX_INFERENCE_MODELS: usize = 200;
@@ -442,7 +443,7 @@ pub fn direct_gateway_credentials(
         .get("ANTHROPIC_AUTH_TOKEN")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|value| is_usable_credential(value))
         .ok_or_else(|| {
             AppError::localized(
                 "claude_desktop.provider.auth_token_missing",
@@ -453,6 +454,13 @@ pub fn direct_gateway_credentials(
         .to_string();
 
     Ok(DirectGatewayCredentials { base_url, api_key })
+}
+
+fn is_usable_credential(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed != crate::live::project::claude::PROXY_TOKEN_PLACEHOLDER
+        && !trimmed.starts_with(SEALED_CREDENTIAL_PREFIX)
 }
 
 pub fn validate_direct_provider(provider: &Provider) -> Result<(), AppError> {
@@ -572,7 +580,8 @@ fn has_proxy_base_url_and_key(provider: &Provider) -> bool {
     }
 
     let has_key = env
-        .and_then(|value| {
+        .into_iter()
+        .flat_map(|value| {
             [
                 "ANTHROPIC_AUTH_TOKEN",
                 "ANTHROPIC_API_KEY",
@@ -581,13 +590,12 @@ fn has_proxy_base_url_and_key(provider: &Provider) -> bool {
                 "GEMINI_API_KEY",
             ]
             .into_iter()
-            .find_map(|key| value.get(key))
+            .filter_map(|key| value.get(key))
         })
-        .or_else(|| provider.settings_config.get("apiKey"))
-        .or_else(|| provider.settings_config.get("api_key"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
+        .chain(provider.settings_config.get("apiKey"))
+        .chain(provider.settings_config.get("api_key"))
+        .filter_map(Value::as_str)
+        .any(is_usable_credential);
 
     has_base_url && has_key
 }
@@ -1634,39 +1642,120 @@ fn windows_local_app_data_dir() -> PathBuf {
         .unwrap_or_else(|| get_home_dir().join("AppData").join("Local"))
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn windows_paths_from_local_app_data(local_app_data: &Path) -> ClaudeDesktopPaths {
-    let normal_dir = pick_windows_claude_dir(local_app_data, false)
+    let all_roots = windows_claude_search_roots(local_app_data);
+    let normal_dir = pick_windows_claude_dir_in_roots(&all_roots, false)
         .unwrap_or_else(|| local_app_data.join("Claude"));
-    let threep_dir = pick_windows_claude_dir(local_app_data, true)
-        .unwrap_or_else(|| local_app_data.join("Claude-3p"));
+    let normal_root = normal_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| local_app_data.to_path_buf());
+    let threep_dir = if normal_root != local_app_data {
+        let package_roots = windows_package_sibling_roots(&normal_root);
+        pick_windows_claude_dir_in_roots(&package_roots, true)
+            .unwrap_or_else(|| normal_root.join("Claude-3p"))
+    } else {
+        pick_windows_claude_dir_in_roots(&all_roots, true)
+            .unwrap_or_else(|| local_app_data.join("Claude-3p"))
+    };
     paths_from_dirs(normal_dir, threep_dir)
 }
 
-#[cfg(windows)]
-fn pick_windows_claude_dir(local_app_data: &Path, threep: bool) -> Option<PathBuf> {
+#[cfg(any(windows, test))]
+fn windows_claude_search_roots(local_app_data: &Path) -> Vec<(PathBuf, u8)> {
+    let mut roots = vec![(local_app_data.to_path_buf(), 4u8)];
+    let packages_dir = local_app_data.join("Packages");
+    if let Ok(entries) = std::fs::read_dir(packages_dir) {
+        let mut packages: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(is_claude_msix_package_name)
+            })
+            .collect();
+        packages.sort();
+        for pkg in packages {
+            let local_cache = pkg.join("LocalCache");
+            roots.push((local_cache.join("Roaming"), 3u8));
+            roots.push((local_cache.join("Local"), 2u8));
+        }
+    }
+    roots
+}
+
+#[cfg(any(windows, test))]
+fn windows_package_sibling_roots(normal_root: &Path) -> Vec<(PathBuf, u8)> {
+    let mut roots = vec![(normal_root.to_path_buf(), 3u8)];
+    if let Some(local_cache) = normal_root.parent() {
+        for (sub, rank) in [("Roaming", 3u8), ("Local", 2u8)] {
+            let candidate = local_cache.join(sub);
+            if candidate != normal_root {
+                roots.push((candidate, rank));
+            }
+        }
+    }
+    roots
+}
+
+#[cfg(any(windows, test))]
+fn is_claude_msix_package_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.starts_with("claude_") || lower.starts_with("anthropicpbc.claude_")
+}
+
+#[cfg(any(windows, test))]
+fn pick_windows_claude_dir_in_roots(roots: &[(PathBuf, u8)], threep: bool) -> Option<PathBuf> {
     let exact_name = if threep { "Claude-3p" } else { "Claude" };
-    let exact = local_app_data.join(exact_name);
-    if exact.exists() {
-        return Some(exact);
+    let mut candidates: Vec<(u16, PathBuf)> = Vec::new();
+
+    for (root, root_rank) in roots {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if !name.starts_with("Claude") || name.contains("-3p") != threep {
+                continue;
+            }
+            let score = windows_dir_score(&path, name == exact_name, *root_rank);
+            candidates.push((score, path));
+        }
     }
 
-    let mut candidates: Vec<PathBuf> = std::fs::read_dir(local_app_data)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_dir())
-        .filter(|path| {
-            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-                return false;
-            };
-            let starts = name.starts_with("Claude");
-            let is_threep = name.contains("-3p");
-            starts && is_threep == threep
-        })
-        .collect();
-    candidates.sort();
-    candidates.into_iter().next()
+    candidates.sort_by(|(sa, pa), (sb, pb)| sb.cmp(sa).then_with(|| pa.cmp(pb)));
+    candidates.into_iter().next().map(|(_, path)| path)
+}
+
+#[cfg(any(windows, test))]
+fn windows_dir_score(path: &Path, is_exact_name: bool, root_rank: u8) -> u16 {
+    let mut score = u16::from(root_rank);
+    if is_exact_name {
+        score += 10;
+    }
+    if path.join(CONFIG_FILE).is_file() {
+        score += 100;
+    }
+    if path.join(CONFIG_LIBRARY_DIR).is_dir() {
+        score += 50;
+    }
+    if std::fs::read_dir(path)
+        .ok()
+        .and_then(|mut it| it.next())
+        .is_some()
+    {
+        score += 20;
+    }
+    score
 }
 
 #[cfg(any(target_os = "macos", windows, target_os = "linux", test))]
@@ -3181,5 +3270,93 @@ mod tests {
             None,
         );
         assert!(!is_compatible_direct_provider(&missing_bearer));
+    }
+
+    #[test]
+    fn claude_desktop_rejects_proxy_placeholder_and_sealed_credentials() {
+        for bad in ["", "   ", "PROXY_MANAGED", "__sealed__:v1:ciphertext"] {
+            let mut direct = direct_provider("bad-direct");
+            direct.settings_config["env"]["ANTHROPIC_AUTH_TOKEN"] = json!(bad);
+            assert!(
+                validate_direct_provider(&direct).is_err(),
+                "direct mode must reject token {bad:?}"
+            );
+
+            let mut proxy = proxy_provider("bad-proxy");
+            proxy.settings_config["env"]["ANTHROPIC_AUTH_TOKEN"] = json!(bad);
+            assert!(
+                validate_proxy_provider(&proxy).is_err(),
+                "proxy mode must reject token {bad:?}"
+            );
+        }
+
+        // Fallback key must still succeed when an earlier env slot contains a placeholder
+        let mut fallback = proxy_provider("fallback-proxy");
+        fallback.settings_config["env"]["ANTHROPIC_AUTH_TOKEN"] = json!("PROXY_MANAGED");
+        fallback.settings_config["env"]["ANTHROPIC_API_KEY"] = json!("sk-real-upstream-key");
+        assert!(validate_proxy_provider(&fallback).is_ok());
+
+        let mut sealed_fallback = proxy_provider("sealed-top-key");
+        sealed_fallback.settings_config["env"] = json!({
+            "ANTHROPIC_BASE_URL": "https://gateway.example.com",
+            "ANTHROPIC_AUTH_TOKEN": "__sealed__:opaque"
+        });
+        sealed_fallback.settings_config["apiKey"] = json!("sk-real-top");
+        assert!(validate_proxy_provider(&sealed_fallback).is_ok());
+    }
+
+    #[test]
+    fn windows_paths_discover_msix_local_cache_roaming_and_sibling_threep() {
+        let temp = TempDir::new().expect("tempdir");
+        let local = temp.path();
+
+        // Both empty LocalCache/Local/Claude and populated LocalCache/Roaming/Claude exist,
+        // plus an unrelated stale AppData/Local/Claude-3p from before MSIX discovery existed.
+        let pkg = local.join("Packages").join("Claude_pzs8sxrjxfjjc");
+        let empty_local_claude = pkg.join("LocalCache").join("Local").join("Claude");
+        let roaming_claude = pkg.join("LocalCache").join("Roaming").join("Claude");
+        fs::create_dir_all(&empty_local_claude).unwrap();
+        fs::create_dir_all(&roaming_claude).unwrap();
+        fs::write(
+            roaming_claude.join(CONFIG_FILE),
+            r#"{"deploymentMode":"1p"}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(local.join("Claude-3p").join(CONFIG_LIBRARY_DIR)).unwrap();
+
+        let paths = windows_paths_from_local_app_data(local);
+        assert_eq!(paths.normal_config_path, roaming_claude.join(CONFIG_FILE));
+        // Must place Claude-3p alongside the MSIX normal_dir instead of stray AppData/Local/Claude-3p
+        let expected_threep = pkg.join("LocalCache").join("Roaming").join("Claude-3p");
+        assert_eq!(paths.threep_config_path, expected_threep.join(CONFIG_FILE));
+
+        // Also match AnthropicPBC.Claude_* prefix
+        let temp2 = TempDir::new().expect("tempdir2");
+        let local2 = temp2.path();
+        let pkg2 = local2
+            .join("Packages")
+            .join("AnthropicPBC.Claude_1.2.3.0_x64__abc");
+        let roaming2 = pkg2.join("LocalCache").join("Roaming").join("Claude");
+        let roaming2_3p = pkg2.join("LocalCache").join("Roaming").join("Claude-3p");
+        fs::create_dir_all(&roaming2).unwrap();
+        fs::create_dir_all(&roaming2_3p).unwrap();
+        fs::write(roaming2.join(CONFIG_FILE), "{}").unwrap();
+        fs::write(roaming2_3p.join(CONFIG_FILE), "{}").unwrap();
+
+        let paths2 = windows_paths_from_local_app_data(local2);
+        assert_eq!(paths2.normal_config_path, roaming2.join(CONFIG_FILE));
+        assert_eq!(paths2.threep_config_path, roaming2_3p.join(CONFIG_FILE));
+
+        // Plain non-MSIX fallback still points directly under local_app_data
+        let temp3 = TempDir::new().expect("tempdir3");
+        let paths3 = windows_paths_from_local_app_data(temp3.path());
+        assert_eq!(
+            paths3.normal_config_path,
+            temp3.path().join("Claude").join(CONFIG_FILE)
+        );
+        assert_eq!(
+            paths3.threep_config_path,
+            temp3.path().join("Claude-3p").join(CONFIG_FILE)
+        );
     }
 }

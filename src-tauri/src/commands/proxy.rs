@@ -309,7 +309,35 @@ pub async fn set_proxy_client_host(
 }
 
 pub(crate) async fn save_proxy_client_host(state: &AppState, host: &str) -> Result<(), String> {
+    let previous_host = crate::settings::get_proxy_client_host();
+    let global = state
+        .db
+        .get_global_proxy_config()
+        .await
+        .map_err(|e| e.to_string())?;
+    let trimmed = host.trim();
+    let next_host = (!trimmed.is_empty()).then(|| trimmed.to_string());
+    let old_tls = crate::services::proxy::effective_tls_target_host(
+        &global.listen_address,
+        previous_host.as_deref(),
+    );
+    let new_tls = crate::services::proxy::effective_tls_target_host(
+        &global.listen_address,
+        next_host.as_deref(),
+    );
+
     crate::settings::set_proxy_client_host(host).map_err(|e| e.to_string())?;
+
+    if old_tls != new_tls {
+        if let Err(err) = state.proxy_service.restart_for_tls_change().await {
+            let _ = crate::settings::set_proxy_client_host(previous_host.as_deref().unwrap_or(""));
+            if !state.proxy_service.is_running().await && global.proxy_enabled {
+                let _ = state.proxy_service.start().await;
+            }
+            return Err(err);
+        }
+    }
+
     resync_proxy_clients(state).await
 }
 
@@ -326,14 +354,18 @@ pub async fn set_proxy_tls_cert(
     state: tauri::State<'_, AppState>,
     path: String,
 ) -> Result<(), String> {
+    let previous_cert = crate::settings::get_proxy_tls_cert();
+    let was_running = state.proxy_service.is_running().await;
     crate::settings::set_proxy_tls_cert(&path).map_err(|e| e.to_string())?;
     // 证书在 start() 里读取，改完必须重启才能换掉已加载的 acceptor
-    state
-        .proxy_service
-        .restart_for_tls_change()
-        .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    if let Err(err) = state.proxy_service.restart_for_tls_change().await {
+        let _ = crate::settings::set_proxy_tls_cert(previous_cert.as_deref().unwrap_or(""));
+        if was_running && !state.proxy_service.is_running().await {
+            let _ = state.proxy_service.start().await;
+        }
+        return Err(err);
+    }
+    Ok(())
 }
 
 /// 候选监听主机选项
@@ -378,12 +410,15 @@ pub async fn get_proxy_endpoints_info(
 
     let target_host = client_host.as_deref().unwrap_or(&listen_address);
     let effective_origin = crate::services::proxy::proxy_origin(target_host, listen_port);
-    let is_tls = !crate::services::proxy::is_loopback_host(target_host);
+    let tls_target_host =
+        crate::services::proxy::effective_tls_target_host(&listen_address, client_host.as_deref());
+    let is_tls = tls_target_host.is_some();
 
     let data_dir = crate::config::get_app_config_dir();
     let explicit = crate::settings::get_proxy_tls_cert();
-    let material =
-        crate::proxy::tls::TlsMaterial::resolve(explicit.as_deref(), &data_dir, target_host);
+    let material = tls_target_host.as_deref().and_then(|host| {
+        crate::proxy::tls::TlsMaterial::resolve(explicit.as_deref(), &data_dir, host)
+    });
 
     let (cert_available, detected_cert_file, detected_cert_path) = match material {
         Some(mat) => (
@@ -405,25 +440,34 @@ pub async fn get_proxy_endpoints_info(
         is_tls: false,
     });
 
-    // 扫描 tls 目录获取已签发的 *.ts.net 域名
+    // 扫描 tls 目录获取已签发且私钥齐全的 *.ts.net 域名（确定性排序，不全量跳过后续项）
     let tls_dir = data_dir.join("tls");
     if let Ok(entries) = std::fs::read_dir(&tls_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("crt") {
-                let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-                let host_stem = file_name.strip_suffix(".crt").unwrap_or(file_name);
-                if host_stem.contains(".ts.net") {
-                    available_hosts.push(HostOption {
-                        value: host_stem.to_string(),
-                        kind: "tailscaleDomain".to_string(),
-                        label: format!("{host_stem} (Tailscale Domain)"),
-                        description: "Tailscale MagicDNS with public CA certificate".to_string(),
-                        is_tls: true,
-                    });
-                    break;
+        let mut ts_hosts: Vec<String> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("crt") {
+                    return None;
                 }
-            }
+                if !path.with_extension("key").is_file() {
+                    return None;
+                }
+                let file_name = path.file_name().and_then(|s| s.to_str())?;
+                let host_stem = file_name.strip_suffix(".crt")?;
+                host_stem.contains(".ts.net").then(|| host_stem.to_string())
+            })
+            .collect();
+        ts_hosts.sort();
+        ts_hosts.dedup();
+        for host_stem in ts_hosts {
+            available_hosts.push(HostOption {
+                value: host_stem.clone(),
+                kind: "tailscaleDomain".to_string(),
+                label: format!("{host_stem} (Tailscale Domain)"),
+                description: "Tailscale MagicDNS with public CA certificate".to_string(),
+                is_tls: true,
+            });
         }
     }
 

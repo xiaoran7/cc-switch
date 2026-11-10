@@ -69,10 +69,10 @@ fn check_request(
     if !path.starts_with(TOKEN_PROTECTED_PREFIX) && headers.contains_key(header::ORIGIN) {
         return Err("requests from web pages are not accepted");
     }
-    if is_loopback_listener(listen_address) {
+    if should_enforce_host_header(listen_address) {
         if let Some(host) = headers.get(header::HOST) {
             let host = host.to_str().ok().and_then(host_name);
-            if !host.is_some_and(|host| is_local_host(&host, client_host)) {
+            if !host.is_some_and(|host| is_local_host(&host, listen_address, client_host)) {
                 return Err("unexpected Host header");
             }
         }
@@ -80,15 +80,11 @@ fn check_request(
     Ok(())
 }
 
-/// A listener on a LAN address is reached under whatever names that network uses,
-/// so the Host rule only applies when the proxy listens on this machine alone.
-fn is_loopback_listener(listen_address: &str) -> bool {
-    let address = listen_address.trim().trim_matches(['[', ']']);
-    address.eq_ignore_ascii_case("localhost")
-        // `to_canonical`：`::ffff:127.0.0.1` 也绑在回环上，但 IPv6 的 is_loopback 不认它
-        || address
-            .parse::<IpAddr>()
-            .is_ok_and(|ip| ip.to_canonical().is_loopback())
+/// 监听回环或通配网卡（`0.0.0.0` / `::`）时都必须校验 Host 头，
+/// 防止本机浏览器通过 DNS rebinding（如 `evil.example -> 127.0.0.1`）绕过同源限制。
+/// 仅当显式绑定在独立非回环网卡（如 `192.168.1.5`）时放行该局域网接入主机名。
+fn should_enforce_host_header(listen_address: &str) -> bool {
+    crate::services::proxy::is_loopback_host(listen_address)
 }
 
 /// The host part of a Host header, lowercased, without port, brackets or trailing dot.
@@ -101,22 +97,27 @@ fn host_name(value: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
+fn normalize_host(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches(['[', ']'])
+        .trim_end_matches('.')
+        .to_ascii_lowercase()
+}
+
 /// Names a rebinding page cannot use: IP literals (rebinding needs a domain),
-/// `localhost` and the reserved private-use `.localhost` / `.local` / `.internal`
-/// (the last covers `host.docker.internal`), plus the client address the user set.
-fn is_local_host(host: &str, client_host: Option<&str>) -> bool {
+/// `localhost` and the reserved/private-use `.localhost` / `.local` / `.internal` / `.ts.net`
+/// suffixes (Tailscale MagicDNS is allowed even when `client_host` is configured as a `100.x` IP),
+/// plus the explicit `client_host` or hostname listener the user configured.
+fn is_local_host(host: &str, listen_address: &str, client_host: Option<&str>) -> bool {
     host.parse::<IpAddr>().is_ok()
         || host == "localhost"
-        || [".localhost", ".local", ".internal"]
+        || [".localhost", ".local", ".internal", ".ts.net"]
             .iter()
-            .any(|suffix| host.ends_with(suffix))
-        || client_host.is_some_and(|client| {
-            client
-                .trim()
-                .trim_matches(['[', ']'])
-                .trim_end_matches('.')
-                .eq_ignore_ascii_case(host)
-        })
+            .any(|suffix| host.len() > suffix.len() && host.ends_with(suffix))
+        || client_host.is_some_and(|client| normalize_host(client) == host)
+        || (!crate::services::proxy::is_loopback_host(listen_address)
+            && normalize_host(listen_address) == host)
 }
 
 #[cfg(test)]
@@ -219,10 +220,51 @@ mod tests {
     #[test]
     fn lan_listener_accepts_any_host_name() {
         let h = headers(&[("host", "devbox.corp.example:15721")]);
-        assert_eq!(check_request("/v1/messages", &h, "0.0.0.0", None), Ok(()));
         assert_eq!(
             check_request("/v1/messages", &h, "192.168.1.5", None),
             Ok(())
         );
+    }
+
+    #[test]
+    fn wildcard_listener_enforces_host_guard_and_allows_tailnet() {
+        for listen in ["0.0.0.0", "::", "[::]"] {
+            for rejected in [
+                "rebind.evil.example:15721",
+                "devbox.corp.example:15721",
+                "evil.example.:15721",
+                "ts.net:15721",
+                "evilts.net:15721",
+                "foo.ts.net.evil.example:15721",
+            ] {
+                let h = headers(&[("host", rejected)]);
+                assert!(
+                    check_request("/v1/messages", &h, listen, None).is_err(),
+                    "{listen} should reject {rejected}"
+                );
+            }
+
+            for allowed in [
+                "127.0.0.1:15721",
+                "100.64.0.1:15721",
+                "my-node.tail123.ts.net:15721",
+                "host.docker.internal:15721",
+                "my-mac.local:15721",
+            ] {
+                let h = headers(&[("host", allowed)]);
+                assert_eq!(
+                    check_request("/v1/messages", &h, listen, Some("100.64.0.1")),
+                    Ok(()),
+                    "{listen} should allow {allowed}"
+                );
+            }
+
+            let h = headers(&[("host", "custom.tailnet.example:15721")]);
+            assert_eq!(
+                check_request("/v1/messages", &h, listen, Some("custom.tailnet.example")),
+                Ok(()),
+                "{listen} should allow configured client_host"
+            );
+        }
     }
 }

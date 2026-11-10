@@ -332,17 +332,17 @@ export function useSetProxyClientHost() {
     mutationFn: (host: string) => proxyApi.setProxyClientHost(host),
     onSuccess: () => {
       toast.success(t("proxy.settings.toast.saved"), { closeButton: true });
-      queryClient.invalidateQueries({ queryKey: proxyKeys.clientHost });
-      queryClient.invalidateQueries({ queryKey: proxyKeys.endpointsInfo });
     },
     onError: (error: Error) => {
       toast.error(
         t("proxy.settings.toast.saveFailed", { error: error.message }),
       );
     },
-    // 重写失败时地址也已经存下了，两种情况都刷新
+    // 重写失败时地址也已经存下了（若 TLS 重启失败后端会回滚），两种情况都刷新
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: proxyKeys.clientHost });
+      queryClient.invalidateQueries({ queryKey: proxyKeys.endpointsInfo });
+      queryClient.invalidateQueries({ queryKey: proxyKeys.status });
     },
   });
 }

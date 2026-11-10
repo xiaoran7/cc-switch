@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- FORK-NOTICE: 以下条目属于本地 Fork，不属于上游。上游条目一律从 "## [4.0.25]" 开始。 -->
 
+## [4.0.25+tailnet.4] - 2026-11-10
+
+### Changed
+
+- **版本号递增至 `4.0.25+tailnet.4`**：同步更新 `package.json`、`Cargo.toml`、`Cargo.lock`、`tauri.conf.json` 与 `FORK.md`；补充 `tests/components/RoutingSection.test.tsx` 组件单测与 Rust 单元测试覆盖本次 6 项修复。
+
+### Fixed
+
+- **通配监听 + 非回环 `proxy_client_host` TLS 终结与状态闭环**（`services/proxy.rs`、`proxy/server.rs`、`commands/proxy.rs`、`RoutingSection.tsx`、`lib/query/proxy.ts`）：新增 `effective_tls_target_host` 区分严格回环与 `0.0.0.0`/`::` 通配监听，使通配监听在配置非回环客户端地址时自动启用 HTTPS 终结并按客户端主机名解析证书；同时在 `ProxyServer::start` 绑端口前与 `restart_for_tls_change` 停旧服务前先预校验证书，并在 `save_proxy_client_host` / `set_proxy_tls_cert` 重启失败时自动回滚配置并拉回原代理，修复 `get_proxy_endpoints_info` 证书目录遍历早退及前端 `proxyKeys.endpointsInfo` / `useSetProxyClientHost` 状态刷新与 `::`/`[::]` 预览地址显示。
+- **通配监听下 browser guard DNS Rebinding 防护**：`proxy/browser_guard.rs` 对 `0.0.0.0` / `::` 监听与回环监听同等启用 `Host` 头防重绑定校验，明确放行 `*.ts.net` MagicDNS 及配置的 `client_host`，仅对独立 LAN IP 监听放行自定义局域网主机名。
+- **HTTP 客户端直连旁路覆盖 Tailnet 与私网地址**：`proxy/http_client.rs` 新增 `should_bypass_proxy_url`，为 `get_for_url` 与 `proxy_url_for` 放行 Tailscale CGNAT（`100.64.0.0/10`）、`*.ts.net`、RFC1918、`169.254.0.0/16`、IPv6 ULA（`fc00::/7`）与链路本地（`fe80::/10`）、`*.local` / `*.internal`，并保持 `is_loopback_url` 严格回环语义以保护自环检测。
+- **TLS 证书加载增加叶子证书 SAN/CN 解析与目录回退门禁**：`proxy/tls.rs` 零依赖解析 X.509 DER 叶子证书 SAN（dNSName/iPAddress）与 Subject CN，阻止 Tier 3 目录扫描把不匹配目标主机的证书错误作为回退。
+- **Claude Desktop 占位凭据与 sealed 密钥拦截**：`claude_desktop_config.rs` 的 `direct_gateway_credentials` 与 `has_proxy_base_url_and_key` 统一通过 `is_usable_credential` 过滤 `PROXY_MANAGED` 与 `__sealed__:` 占位符，并在代理模式下跳过失效槽位继续检查备用 key 字段。
+- **Windows MSIX Store 版 Claude Desktop 路径发现**：`claude_desktop_config.rs` 扩展识别 `%LOCALAPPDATA%\Packages\{Claude_*,AnthropicPBC.Claude_*}\LocalCache\{Roaming,Local}` 虚拟化目录，按配置文件与目录内容打分避开空目录，并将 `Claude-3p` 同根协同创建在 `normal_dir` 同级目录。
+
 ## [4.0.25+tailnet.3] - 2026-11-03
 
 跟进上游 `v4.0.25`。上游这一版**依然没有** HTTPS 支持：`proxy_origin()` 仍无条件拼

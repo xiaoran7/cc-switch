@@ -20,6 +20,7 @@ import { proxyApi } from "@/lib/api/proxy";
 import { useProvidersQuery } from "@/lib/query";
 import type { HostOption } from "@/types/proxy";
 import {
+  proxyKeys,
   useGlobalProxyConfig,
   useProxyClientHost,
   useProxyEndpointsInfo,
@@ -100,10 +101,15 @@ const isLoopbackHost = (host: string): boolean => {
   return false;
 };
 
+const isUnspecifiedHost = (host: string): boolean => {
+  const h = host.trim();
+  return h === "0.0.0.0" || h === "::" || h === "[::]";
+};
+
 /** 客户端地址：空（按监听地址）、IP 或主机名；`0.0.0.0` / `::` 客户端连不上 */
 const isValidClientHost = (host: string): boolean => {
   if (host === "") return true;
-  if (host === "0.0.0.0" || host === "::") return false;
+  if (isUnspecifiedHost(host)) return false;
   if (/^[\d.]+$/.test(host) || host.includes(":")) {
     return isValidListenAddress(host);
   }
@@ -113,12 +119,12 @@ const isValidClientHost = (host: string): boolean => {
 };
 
 /** 没设客户端地址时写给客户端的主机，和后端 `proxy_origin` 一致 */
-const defaultClientHost = (listenAddress: string): string =>
-  listenAddress === "0.0.0.0"
-    ? "127.0.0.1"
-    : listenAddress === "::"
-      ? "::1"
-      : listenAddress;
+const defaultClientHost = (listenAddress: string): string => {
+  const trimmed = listenAddress.trim();
+  if (trimmed === "0.0.0.0") return "127.0.0.1";
+  if (trimmed === "::" || trimmed === "[::]") return "::1";
+  return trimmed;
+};
 
 function formatUptime(seconds: number, t: TFunction) {
   const hours = Math.floor(seconds / 3600);
@@ -226,7 +232,9 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
   const handleDeletePreset = async (hostToDelete: string) => {
     try {
       await proxyApi.deleteCustomListenHost(hostToDelete);
-      await queryClient.invalidateQueries({ queryKey: ["proxy", "endpoints"] });
+      await queryClient.invalidateQueries({
+        queryKey: proxyKeys.endpointsInfo,
+      });
       toast.success(t("routingSettings.presetDeleted", "已删除预设"));
       if (address === hostToDelete && config?.listenAddress !== hostToDelete) {
         setAddress("127.0.0.1");
@@ -256,12 +264,20 @@ export function RoutingSection({ onOpenApp }: RoutingSectionProps) {
     if (savedClientHost !== undefined) setClientHost(savedClientHost);
   }, [savedClientHost]);
 
-  const liveTargetHost = clientHost.trim() || address.trim() || "127.0.0.1";
-  const liveIsTls = !isLoopbackHost(liveTargetHost);
-  const liveDisplayHost =
-    liveTargetHost === "0.0.0.0" ? "127.0.0.1" : liveTargetHost;
+  const trimmedAddress = address.trim() || "127.0.0.1";
+  const trimmedClientHost = clientHost.trim();
+  const liveTargetHost = trimmedClientHost || trimmedAddress;
+  const liveOriginIsHttps = !isLoopbackHost(liveTargetHost);
+  // 与后端 effective_tls_target_host 一致：严格回环监听始终走 HTTP 明文（适配外部反代），
+  // 通配监听（0.0.0.0 / ::）在配置了非回环 clientHost 时启用本地 TLS 终结。
+  const liveIsTls =
+    !isLoopbackHost(trimmedAddress) ||
+    (isUnspecifiedHost(trimmedAddress) &&
+      !!trimmedClientHost &&
+      !isLoopbackHost(trimmedClientHost));
+  const liveDisplayHost = defaultClientHost(liveTargetHost);
   const livePort = port.trim() || "15721";
-  const liveEffectiveOrigin = `${liveIsTls ? "https" : "http"}://${
+  const liveEffectiveOrigin = `${liveOriginIsHttps ? "https" : "http"}://${
     liveDisplayHost.includes(":") && !liveDisplayHost.startsWith("[")
       ? `[${liveDisplayHost}]`
       : liveDisplayHost

@@ -9,7 +9,7 @@
 | 上游协议 | MIT |
 | 上游作者 | Jason Young |
 | 本 Fork 分支 | `feat/tailnet-https` |
-| 本 Fork 版本号 | `4.0.25+tailnet.3` |
+| 本 Fork 版本号 | `4.0.25+tailnet.4` |
 
 **主权归属上游。** 除下方「本 Fork 改动的模块」一节列出的内容外，其余全部代码、文档、设计均属上游。
 本 Fork 不做无记录魔改；上游发布新版时按
