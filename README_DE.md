@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **Dieser Fork wird nicht mehr gepflegt.** Aktuelle Versionen und Support gibt es beim ursprünglichen Projekt [farion1231/cc-switch](https://github.com/farion1231/cc-switch).
+>
+> Der Tailnet-Zweig ergänzte den lokalen Proxy um HTTPS-Terminierung, DNS-Namen und Tailnet-Adressen, Zertifikatsoptionen sowie die Endpunktauswahl in den Einstellungen. Details stehen in den [Änderungshinweisen des Forks](https://github.com/xiaoran7/cc-switch/blob/feat/tailnet-https/FORK.md).
+
 <div align="center">
 
 # CC Switch

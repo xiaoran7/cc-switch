@@ -5,6 +5,10 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- README documents the end of maintenance, links to the original upstream, and summarizes the Tailnet HTTPS customization.
+
 ## [4.0.24] - 2026-11-01
 
 This release adds an Auth Center switch that makes sign-in copy the login link instead of opening the default browser, for people who keep each account in its own browser profile. Fixes cover Claude routes downgrading `max` effort to `xhigh` for GPT 6.1 Sol / Terra, DeepSeek Harness showing no third-party providers after a model with PDF input was picked, CC Switch exiting on WSL when the tray could not write its icons, Codex Chat cards losing the reasoning effort after "Supports Reasoning Effort" was turned off and on again, and the DeepSeek official sign-in card saying it signs in with a Claude account.
