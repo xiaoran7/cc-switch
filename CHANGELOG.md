@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- FORK-NOTICE: 以下条目属于本地 Fork，不属于上游。上游条目一律从 "## [4.0.25]" 开始。 -->
 
+## [Unreleased]
+
+- README documents the end of maintenance, links to the original upstream, and summarizes the Tailnet HTTPS customization.
+
 ## [4.0.25+tailnet.4] - 2026-11-10
 
 ### Changed

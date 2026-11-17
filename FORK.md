@@ -1,5 +1,8 @@
 # 本 Fork 说明（tailnet HTTPS 支持）
 
+> [!IMPORTANT]
+> **本 fork 已停止维护。** 最新版本和支持见上游 [farion1231/cc-switch](https://github.com/farion1231/cc-switch)。本页记录 Tailnet 分支的历史改动。
+
 ## 上游溯源
 
 | 项 | 值 |
@@ -11,9 +14,7 @@
 | 本 Fork 分支 | `feat/tailnet-https` |
 | 本 Fork 版本号 | `4.0.25+tailnet.4` |
 
-**主权归属上游。** 除下方「本 Fork 改动的模块」一节列出的内容外，其余全部代码、文档、设计均属上游。
-本 Fork 不做无记录魔改；上游发布新版时按
-`git fetch upstream --tags && git rebase --onto <新 tag> <上个基线 tag> feat/tailnet-https` 跟进。
+上游项目负责原版的代码、文档和设计。下文列出 Tailnet 分支对原版的改动。
 
 ## ⚠️ 自动更新已禁用（防止被官方版覆盖）
 
@@ -30,7 +31,7 @@
 上游 updater 在端点为空时返回 `EmptyEndpoints`，不会下载任何安装包。前端
 `checkForUpdate()` 把这个错误映射为 `disabled`，与"已是最新"同样静默处理。
 
-**后果与义务**：本 Fork 不再自动跟进上游，改由自动化日常同步脚本维护：
+**历史同步方式**：维护期间使用以下脚本同步上游。
 
 ```bash
 python scripts/sync_upstream.py

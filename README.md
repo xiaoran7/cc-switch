@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **This fork is no longer maintained.** Use the original upstream [farion1231/cc-switch](https://github.com/farion1231/cc-switch) for current releases and support.
+>
+> The historical Tailnet branch added HTTPS termination for the local proxy, DNS name and Tailnet address support, certificate configuration, and endpoint selection in Settings. It let Claude Desktop use a proxy on another Tailnet device over HTTPS. See the [fork's change notes](FORK.md).
+
 <div align="center">
 
 # CC Switch

@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **本 fork 已停止维护。** 最新版本和支持请到最上游 [farion1231/cc-switch](https://github.com/farion1231/cc-switch)。
+>
+> 历史 Tailnet 分支为本地代理增加了 HTTPS 终结、域名与 Tailnet 地址监听、证书配置和设置页端点选择，让 Claude Desktop 可通过 HTTPS 连接 Tailnet 中另一台设备的代理。详见 [fork 改动说明](FORK.md)。
+
 <div align="center">
 
 # CC Switch

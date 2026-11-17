@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> **このフォークのメンテナンスは終了しました。** 最新版とサポートについては上流の [farion1231/cc-switch](https://github.com/farion1231/cc-switch) を参照してください。
+>
+> Tailnet ブランチでは、ローカルプロキシに HTTPS 終端、DNS 名と Tailnet アドレスでの待ち受け、証明書設定、設定画面での接続先選択を追加しました。詳しくは[フォークの変更点](FORK.md)を参照してください。
+
 <div align="center">
 
 # CC Switch
